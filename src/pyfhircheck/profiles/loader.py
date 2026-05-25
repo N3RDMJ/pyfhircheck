@@ -195,6 +195,12 @@ class ProfileRegistry:
                             slice_data["type_code"] = tc["code"]
                 else:
                     slice_data["elements"][slice_child] = element_constraint
+                    if slice_child == "resource" and slice_data["type_code"] is None:
+                        type_entries = element.get("type", [])
+                        if isinstance(type_entries, list) and len(type_entries) == 1:
+                            tc = type_entries[0]
+                            if isinstance(tc, dict) and isinstance(tc.get("code"), str):
+                                slice_data["type_code"] = tc["code"]
                 continue
             element_constraints[constraint_path] = element_constraint
             if "." in normalized_field:

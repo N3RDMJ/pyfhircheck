@@ -22,7 +22,13 @@ class CustomRuleRunner:
         if resource_type == "Encounter" and self.rules.get("encounterRequiresPatient", True):
             subject = resource.get("subject", {})
             reference = subject.get("reference") if isinstance(subject, dict) else None
-            if not isinstance(reference, str) or not reference.startswith("Patient/"):
+            if isinstance(reference, str):
+                is_patient = reference.startswith("Patient/")
+                if not is_patient and reference in bundle_index:
+                    is_patient = bundle_index[reference].get("resourceType") == "Patient"
+                if not is_patient:
+                    issues.append(ValidationIssue(Severity.ERROR, "custom.encounter.patient", "Encounter.subject must reference a Patient", resource_type, resource_id, "Encounter.subject", source="custom-rules"))
+            else:
                 issues.append(ValidationIssue(Severity.ERROR, "custom.encounter.patient", "Encounter.subject must reference a Patient", resource_type, resource_id, "Encounter.subject", source="custom-rules"))
         if resource_type == "Composition":
             sections = self.rules.get("compositionRequiredSections", [])

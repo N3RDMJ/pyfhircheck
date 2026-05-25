@@ -26,6 +26,16 @@ class TerminologyResolver:
         self.loaded_value_sets = 0
         self._load_packages(package_paths or [], remote_sources or [])
 
+    def validate_coding(self, system: str, code: str) -> bool | None:
+        if self.config.mode == "off":
+            return None
+        if system in self.config.ignored_code_systems:
+            return None
+        concepts = self.package_code_systems.get(system) or self.package_code_systems.get(system.rsplit("/", 1)[-1])
+        if concepts is None:
+            return None
+        return code in concepts
+
     def contains(self, value_set: str, code: str) -> bool | None:
         if self.config.mode == "off":
             return None

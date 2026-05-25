@@ -59,6 +59,7 @@ PYTHON_TYPES: dict[str, tuple[type, ...]] = {
 class SpecificationDefinitions:
     resources: dict[str, ResourceDef] = field(default_factory=dict)
     complex_types: dict[str, dict[str, tuple[type, ...]]] = field(default_factory=dict)
+    complex_type_elements: dict[str, dict[str, ElementDef]] = field(default_factory=dict)
     loaded_structure_definitions: int = 0
     merged_snapshots: int = 0
     _resource_structure_definitions: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -70,15 +71,23 @@ class SpecificationDefinitions:
         structure_definitions = list(iter_structure_definitions(paths, remote_sources))
         resolver = SnapshotResolver(structure_definitions)
         definitions._resolver = resolver
+        deferred_complex_types: dict[str, dict[str, Any]] = {}
         for structure_definition in structure_definitions:
             definitions.loaded_structure_definitions += 1
-            if structure_definition.get("kind") == "resource" and isinstance(structure_definition.get("type"), str):
-                type_name = structure_definition["type"]
-                is_constraint = structure_definition.get("derivation") == "constraint"
+            kind = structure_definition.get("kind")
+            type_name = structure_definition.get("type")
+            is_constraint = structure_definition.get("derivation") == "constraint"
+            if kind == "resource" and isinstance(type_name, str):
                 if not is_constraint or type_name not in definitions._resource_structure_definitions:
                     definitions._resource_structure_definitions[type_name] = structure_definition
                 continue
+            if kind == "complex-type" and isinstance(type_name, str):
+                if not is_constraint or type_name not in deferred_complex_types:
+                    deferred_complex_types[type_name] = structure_definition
+                continue
             definitions._ingest(structure_definition, resolver.elements_for(structure_definition))
+        for type_name, sd in deferred_complex_types.items():
+            definitions._ingest(sd, resolver.elements_for(sd))
         definitions.merged_snapshots = resolver.merged_count
         return definitions
 
@@ -108,6 +117,9 @@ class SpecificationDefinitions:
             fields = self._complex_type_fields(type_name, elements)
             if fields:
                 self.complex_types[type_name] = fields
+            type_elements = _complex_type_element_defs(type_name, elements)
+            if type_elements:
+                self.complex_type_elements[type_name] = type_elements
 
     def _resource_def(self, resource_type: str, elements: list[dict[str, Any]]) -> ResourceDef:
         resource_elements = dict(COMMON_ELEMENTS)
@@ -202,6 +214,18 @@ def merged_complex_types(loaded: dict[str, dict[str, tuple[type, ...]]]) -> dict
     for name, fields in loaded.items():
         merged.setdefault(name, {}).update(fields)
     return merged
+
+
+def _complex_type_element_defs(type_name: str, elements: list[dict[str, Any]]) -> dict[str, ElementDef]:
+    result: dict[str, ElementDef] = {}
+    for element in elements:
+        field_name = _direct_child(type_name, element.get("path"))
+        if field_name is None:
+            continue
+        elem_def = _element_def(element)
+        if elem_def is not None:
+            result[field_name] = elem_def
+    return result
 
 
 def _build_children(parts_prefix: str, child_list: list[tuple[str, dict[str, Any]]]) -> dict[str, ElementDef]:

@@ -1,0 +1,24 @@
+{
+  "id": "neg-array-shape",
+  "description": "Patient.gender is an array instead of a single value (max cardinality 1)",
+  "ruleClass": "objectArrayShape",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["cardinality.max"],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "pat-array-gender",
+    "gender": ["male", "female"]
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "value",
+        "path": "Patient.gender"
+      }
+    ]
+  }
+}

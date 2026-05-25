@@ -82,16 +82,22 @@ class PackageResolver:
 
     def resolve_with_dependencies(self, packages: Iterable[PackageConfig]) -> list[ResolvedPackage]:
         resolved_map: dict[str, ResolvedPackage] = {}
+        failed: set[str] = set()
         queue = list(packages)
         while queue:
             package = queue.pop(0)
-            if package.name in resolved_map:
+            if package.name in resolved_map or package.name in failed:
                 continue
-            resolved = self.resolve(package)
+            try:
+                resolved = self.resolve(package)
+            except PackageError:
+                failed.add(package.name)
+                logger.warning("skipping unavailable dependency %s@%s", package.name, package.version)
+                continue
             resolved_map[package.name] = resolved
             if resolved.manifest:
                 for dep_name, dep_version in resolved.manifest.dependencies.items():
-                    if dep_name not in resolved_map and not dep_name.startswith("hl7.fhir.r4.examples"):
+                    if dep_name not in resolved_map and dep_name not in failed and not dep_name.startswith("hl7.fhir.r4.examples"):
                         queue.append(PackageConfig(name=dep_name, version=dep_version, registry=package.registry))
         return _topological_sort(resolved_map)
 

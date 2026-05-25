@@ -1,0 +1,22 @@
+{
+  "id": "neg-resourcetype-missing",
+  "description": "Resource object has no resourceType field",
+  "ruleClass": "resourceType",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["resourceType.required"],
+  "resource": {
+    "id": "no-type"
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "required",
+        "path": "resourceType"
+      }
+    ]
+  }
+}

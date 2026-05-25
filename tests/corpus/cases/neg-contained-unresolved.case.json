@@ -1,0 +1,38 @@
+{
+  "id": "neg-contained-unresolved",
+  "description": "Encounter references contained resource #missing but no matching contained resource exists",
+  "ruleClass": "containedReferences",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["reference.contained.unresolved"],
+  "resource": {
+    "resourceType": "Encounter",
+    "id": "enc-contained-missing",
+    "status": "finished",
+    "class": {
+      "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+      "code": "AMB"
+    },
+    "subject": {
+      "reference": "#missing"
+    },
+    "contained": [
+      {
+        "resourceType": "Patient",
+        "id": "some-other-id",
+        "gender": "male"
+      }
+    ]
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "not-found",
+        "path": "Encounter.subject.reference"
+      }
+    ]
+  }
+}

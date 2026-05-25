@@ -1,0 +1,65 @@
+{
+  "id": "neg-profile-pattern",
+  "description": "Patient declares profile requiring patternCodeableConcept with system=http://required.example but resource has wrong system",
+  "ruleClass": "patternValues",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["profile.pattern", "profile.element.pattern"],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "pat-pattern-fail",
+    "meta": {
+      "profile": [
+        "http://test.parity/StructureDefinition/pattern-patient"
+      ]
+    },
+    "gender": "male",
+    "maritalStatus": {
+      "coding": [
+        {
+          "system": "http://wrong.example",
+          "code": "M"
+        }
+      ]
+    }
+  },
+  "structureDefinitions": [
+    {
+      "resourceType": "StructureDefinition",
+      "url": "http://test.parity/StructureDefinition/pattern-patient",
+      "type": "Patient",
+      "snapshot": {
+        "element": [
+          {
+            "path": "Patient.maritalStatus",
+            "min": 1,
+            "max": "1",
+            "patternCodeableConcept": {
+              "coding": [
+                {
+                  "system": "http://required.example"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "config": {
+    "profiles": {
+      "Patient": [
+        "http://test.parity/StructureDefinition/pattern-patient"
+      ]
+    }
+  },
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "value",
+        "path": "Patient.maritalStatus"
+      }
+    ]
+  }
+}

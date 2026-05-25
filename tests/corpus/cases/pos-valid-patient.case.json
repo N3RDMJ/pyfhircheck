@@ -1,0 +1,19 @@
+{
+  "id": "pos-valid-patient",
+  "description": "Minimal valid Patient with gender and birthDate",
+  "ruleClass": "resourceType",
+  "expectedStatus": "PASS",
+  "expectedIssueCodes": [],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "example-1",
+    "gender": "male",
+    "birthDate": "1990-01-15"
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "PASS",
+    "issues": []
+  }
+}

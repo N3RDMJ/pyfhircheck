@@ -32,9 +32,28 @@ class TerminologyResolver:
         if system in self.config.ignored_code_systems:
             return None
         concepts = self.package_code_systems.get(system) or self.package_code_systems.get(system.rsplit("/", 1)[-1])
-        if concepts is None:
+        if concepts is None or len(concepts) == 0:
             return None
         return code in concepts
+
+    def validate_display(self, system: str, code: str, display: str) -> str | None:
+        if self.config.mode == "off":
+            return None
+        concepts = self.package_code_systems.get(system) or self.package_code_systems.get(system.rsplit("/", 1)[-1])
+        if concepts is None:
+            return None
+        concept = concepts.get(code)
+        if concept is None:
+            return None
+        valid_displays: list[str] = []
+        if concept.display:
+            valid_displays.append(concept.display)
+        valid_displays.extend(concept.designations)
+        if not valid_displays:
+            return None
+        if display in valid_displays:
+            return None
+        return f"Wrong Display Name '{display}' for {system}#{code}. Valid display is one of {len(valid_displays)} choices: {', '.join(repr(d) for d in valid_displays[:3])}"
 
     def contains(self, value_set: str, code: str) -> bool | None:
         if self.config.mode == "off":
@@ -64,6 +83,14 @@ class TerminologyResolver:
             "loadedValueSets": self.loaded_value_sets,
             "expandedPackageValueSets": len(self._value_set_cache),
         }
+
+    def load_value_sets_from(self, paths: list[str]) -> None:
+        for resource in iter_package_resources(paths, [], {"ValueSet", "CodeSystem"}):
+            rt = resource.get("resourceType")
+            if rt == "ValueSet":
+                self._load_value_set(resource)
+            elif rt == "CodeSystem" and resource.get("concept"):
+                self._load_code_system(resource)
 
     def _load_packages(self, paths: list[str], remote_sources: list[str]) -> None:
         for resource in iter_package_resources(paths, remote_sources, {"CodeSystem", "ValueSet"}):

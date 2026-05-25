@@ -78,7 +78,7 @@ class SpecificationDefinitions:
             type_name = structure_definition.get("type")
             is_constraint = structure_definition.get("derivation") == "constraint"
             if kind == "resource" and isinstance(type_name, str):
-                if not is_constraint or type_name not in definitions._resource_structure_definitions:
+                if not is_constraint:
                     definitions._resource_structure_definitions[type_name] = structure_definition
                 continue
             if kind == "complex-type" and isinstance(type_name, str):

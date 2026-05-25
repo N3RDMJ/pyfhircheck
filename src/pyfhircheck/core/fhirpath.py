@@ -6,6 +6,33 @@ from typing import Any, Callable
 
 from pyfhircheck.core.util import get_path, has_path
 
+_CHOICE_SUFFIXES = (
+    "Quantity", "CodeableConcept", "String", "Boolean", "Integer", "DateTime",
+    "Date", "Time", "Instant", "Period", "Range", "Ratio", "SampledData",
+    "Age", "Duration", "Timing", "Annotation", "Attachment", "Identifier",
+    "Reference", "Coding", "HumanName", "Address", "ContactPoint", "Money",
+    "Count", "Distance", "Signature", "Dosage", "Decimal", "Uri", "Url",
+    "Canonical", "Uuid", "Id", "Oid", "Markdown", "Base64Binary",
+    "PositiveInt", "UnsignedInt", "Code",
+)
+
+
+def _augment_choice_types(data: Any) -> Any:
+    if isinstance(data, dict):
+        result = {k: _augment_choice_types(v) for k, v in data.items()}
+        for key in list(data):
+            for suffix in _CHOICE_SUFFIXES:
+                if key.endswith(suffix) and len(key) > len(suffix) and key[0].islower():
+                    base = key[: -len(suffix)]
+                    if base not in result:
+                        result[base] = result[key]
+                    break
+        return result
+    if isinstance(data, list):
+        return [_augment_choice_types(item) for item in data]
+    return data
+
+
 EXISTS_RE = re.compile(r"^([A-Za-z][A-Za-z0-9.]*)\.exists\(\)$")
 EMPTY_RE = re.compile(r"^([A-Za-z][A-Za-z0-9.]*)\.empty\(\)$")
 EQUALS_RE = re.compile(r"^([A-Za-z][A-Za-z0-9.]*)\s*=\s*'([^']*)'$")
@@ -13,10 +40,11 @@ IMPLIES_RE = re.compile(r"^(.+)\s+implies\s+(.+)$")
 
 
 def evaluate(resource: dict[str, Any], expression: str) -> bool | None:
-    backend_result = _evaluate_with_fhirpathpy(resource, expression)
+    augmented = _augment_choice_types(resource)
+    backend_result = _evaluate_with_fhirpathpy(augmented, expression)
     if backend_result is not None:
         return backend_result
-    return _evaluate_fallback(resource, expression)
+    return _evaluate_fallback(augmented, expression)
 
 
 def backend_name() -> str:
@@ -29,7 +57,7 @@ def _evaluate_with_fhirpathpy(resource: dict[str, Any], expression: str) -> bool
     try:
         compiled = _compile(expression)
         result = compiled(resource, {})
-    except (TypeError, ValueError, KeyError, AttributeError):
+    except Exception:
         return None
     return _coerce_result(result)
 

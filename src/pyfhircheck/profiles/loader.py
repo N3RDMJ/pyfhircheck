@@ -54,6 +54,7 @@ class ExtensionConstraint:
     min_value: int = 0
     max_value: str = "1"
     nested_extensions: dict[str, ElementConstraint] | None = None
+    contexts: tuple[tuple[str, str], ...] = ()
 
 
 class ProfileRegistry:
@@ -283,6 +284,13 @@ class ProfileRegistry:
                     fixed = next((value for key, value in element.items() if key.startswith("fixed")), None)
                     if fixed:
                         nested[slice_name] = ElementConstraint(path=field, min=_safe_int(element.get("min", 0)), max=str(element.get("max", "1")), fixed=fixed)
+        contexts: list[tuple[str, str]] = []
+        for ctx in data.get("context", []):
+            if isinstance(ctx, dict):
+                ctx_type = ctx.get("type")
+                ctx_expr = ctx.get("expression")
+                if isinstance(ctx_type, str) and isinstance(ctx_expr, str):
+                    contexts.append((ctx_type, ctx_expr))
         self._extensions[url] = ExtensionConstraint(
             url=url,
             is_modifier=is_modifier,
@@ -290,6 +298,7 @@ class ProfileRegistry:
             min_value=min_value,
             max_value=max_value,
             nested_extensions=nested,
+            contexts=tuple(contexts),
         )
 
 

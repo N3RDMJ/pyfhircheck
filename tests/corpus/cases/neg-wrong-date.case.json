@@ -1,0 +1,25 @@
+{
+  "id": "neg-wrong-date",
+  "description": "Patient.birthDate is 'not-a-date' instead of a valid date",
+  "ruleClass": "primitiveTypes",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["datatype.invalid"],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "pat-bad-date",
+    "birthDate": "not-a-date",
+    "gender": "female"
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "value",
+        "path": "Patient.birthDate"
+      }
+    ]
+  }
+}

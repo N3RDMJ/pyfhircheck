@@ -97,6 +97,7 @@ class ValidatorConfig:
     profiles: dict[str, list[str]] = field(default_factory=dict)
     error_on_unknown_profile: bool = True
     allow_unknown_extensions: bool = False
+    allow_example_urls: bool = True
     severity_policy: dict[str, str] = field(default_factory=dict)
     ci_failure_threshold: str = "error"
     custom_rules: dict[str, Any] = field(default_factory=dict)
@@ -157,6 +158,7 @@ class ValidatorConfig:
             profiles=_config_profiles(data),
             error_on_unknown_profile=bool(data.get("errorOnUnknownProfile", data.get("error_on_unknown_profile", True))),
             allow_unknown_extensions=bool(data.get("allowUnknownExtensions", data.get("allow_unknown_extensions", False))),
+            allow_example_urls=bool(data.get("allow_example_urls", True)),
             severity_policy={
                 str(rule): severity
                 for rule, severity in (data.get("severityPolicy", data.get("severity_policy", {})) or {}).items()

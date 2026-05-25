@@ -1,0 +1,27 @@
+{
+  "id": "pos-valid-observation",
+  "description": "Minimal valid Observation with status and code (non-vitalsigns)",
+  "ruleClass": "resourceType",
+  "expectedStatus": "PASS",
+  "expectedIssueCodes": [],
+  "resource": {
+    "resourceType": "Observation",
+    "id": "obs-1",
+    "status": "final",
+    "code": {
+      "coding": [
+        {
+          "system": "http://loinc.org",
+          "code": "26464-8",
+          "display": "Leukocytes [#/volume] in Blood"
+        }
+      ]
+    }
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "PASS",
+    "issues": []
+  }
+}

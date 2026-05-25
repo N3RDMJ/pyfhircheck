@@ -1,0 +1,29 @@
+{
+  "id": "pos-valid-bundle",
+  "description": "Simple valid collection Bundle with one Patient entry",
+  "ruleClass": "bundleStructure",
+  "expectedStatus": "PASS",
+  "expectedIssueCodes": [],
+  "resource": {
+    "resourceType": "Bundle",
+    "id": "bundle-1",
+    "type": "collection",
+    "entry": [
+      {
+        "fullUrl": "urn:uuid:61ebe359-bfdc-4613-8bf2-c5e300945f0a",
+        "resource": {
+          "resourceType": "Patient",
+          "id": "pat-1",
+          "gender": "female",
+          "birthDate": "1985-06-20"
+        }
+      }
+    ]
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "PASS",
+    "issues": []
+  }
+}

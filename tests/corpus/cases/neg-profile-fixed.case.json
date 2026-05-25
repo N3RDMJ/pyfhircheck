@@ -1,0 +1,52 @@
+{
+  "id": "neg-profile-fixed",
+  "description": "Patient declares profile with fixedBoolean on active=true but resource has active=false",
+  "ruleClass": "fixedValues",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["profile.fixed"],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "pat-fixed-fail",
+    "meta": {
+      "profile": [
+        "http://test.parity/StructureDefinition/fixed-active-patient"
+      ]
+    },
+    "active": false,
+    "gender": "male"
+  },
+  "structureDefinitions": [
+    {
+      "resourceType": "StructureDefinition",
+      "url": "http://test.parity/StructureDefinition/fixed-active-patient",
+      "type": "Patient",
+      "snapshot": {
+        "element": [
+          {
+            "path": "Patient.active",
+            "min": 1,
+            "max": "1",
+            "fixedBoolean": true
+          }
+        ]
+      }
+    }
+  ],
+  "config": {
+    "profiles": {
+      "Patient": [
+        "http://test.parity/StructureDefinition/fixed-active-patient"
+      ]
+    }
+  },
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "value",
+        "path": "Patient.active"
+      }
+    ]
+  }
+}

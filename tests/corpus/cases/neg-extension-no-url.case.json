@@ -1,0 +1,29 @@
+{
+  "id": "neg-extension-no-url",
+  "description": "Patient with an extension that is missing the required url property",
+  "ruleClass": "extensionStructure",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["extension.url"],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "pat-ext-no-url",
+    "gender": "male",
+    "extension": [
+      {
+        "valueString": "some value"
+      }
+    ]
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "required",
+        "path": "Patient.extension[0].url"
+      }
+    ]
+  }
+}

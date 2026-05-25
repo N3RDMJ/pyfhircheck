@@ -1,0 +1,32 @@
+{
+  "id": "neg-coding-shape",
+  "description": "Patient.maritalStatus.coding[0].code is an integer instead of string",
+  "ruleClass": "codeableConceptShape",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["datatype.invalid"],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "pat-bad-coding",
+    "gender": "male",
+    "maritalStatus": {
+      "coding": [
+        {
+          "system": "http://terminology.hl7.org/CodeSystem/v3-MaritalStatus",
+          "code": 12345
+        }
+      ]
+    }
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "value",
+        "path": "Patient.maritalStatus.coding[0].code"
+      }
+    ]
+  }
+}

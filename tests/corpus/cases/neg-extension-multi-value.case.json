@@ -1,0 +1,31 @@
+{
+  "id": "neg-extension-multi-value",
+  "description": "Patient with extension having both valueString and valueBoolean (only one value[x] allowed)",
+  "ruleClass": "extensionStructure",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["extension.value.multiple"],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "pat-ext-multi-val",
+    "gender": "male",
+    "extension": [
+      {
+        "url": "http://example.org/fhir/StructureDefinition/test-ext",
+        "valueString": "hello",
+        "valueBoolean": true
+      }
+    ]
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "structure",
+        "path": "Patient.extension[0]"
+      }
+    ]
+  }
+}

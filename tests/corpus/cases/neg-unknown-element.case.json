@@ -1,0 +1,25 @@
+{
+  "id": "neg-unknown-element",
+  "description": "Patient with an unknown field 'unknownField' not in the StructureDefinition",
+  "ruleClass": "knownElements",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["element.unknown"],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "pat-unknown-field",
+    "gender": "male",
+    "unknownField": true
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "structure",
+        "path": "Patient.unknownField"
+      }
+    ]
+  }
+}

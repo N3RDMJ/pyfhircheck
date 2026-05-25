@@ -1,0 +1,46 @@
+{
+  "id": "neg-wrong-integer",
+  "description": "Claim.insurance.sequence is string 'abc' instead of positiveInt",
+  "ruleClass": "primitiveTypes",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["datatype.invalid"],
+  "resource": {
+    "resourceType": "Claim",
+    "status": "active",
+    "type": {
+      "text": "test"
+    },
+    "use": "claim",
+    "patient": {
+      "reference": "Patient/1"
+    },
+    "created": "2024-01-01",
+    "provider": {
+      "reference": "Practitioner/1"
+    },
+    "priority": {
+      "text": "normal"
+    },
+    "insurance": [
+      {
+        "sequence": "abc",
+        "focal": true,
+        "coverage": {
+          "reference": "Coverage/1"
+        }
+      }
+    ]
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "value",
+        "path": "Claim.insurance[0].sequence"
+      }
+    ]
+  }
+}

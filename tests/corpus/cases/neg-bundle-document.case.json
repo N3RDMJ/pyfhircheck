@@ -1,0 +1,34 @@
+{
+  "id": "neg-bundle-document",
+  "description": "Document Bundle where first entry is Patient instead of required Composition",
+  "ruleClass": "bundleStructure",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["bundle.document.composition"],
+  "resource": {
+    "resourceType": "Bundle",
+    "id": "bundle-doc-bad",
+    "type": "document",
+    "entry": [
+      {
+        "fullUrl": "urn:uuid:patient-1",
+        "resource": {
+          "resourceType": "Patient",
+          "id": "pat-1",
+          "gender": "male"
+        }
+      }
+    ]
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "invalid",
+        "path": "Bundle.entry[0].resource"
+      }
+    ]
+  }
+}

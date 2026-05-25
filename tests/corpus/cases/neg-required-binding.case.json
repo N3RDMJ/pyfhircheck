@@ -1,0 +1,24 @@
+{
+  "id": "neg-required-binding",
+  "description": "Patient.gender uses an invalid code not in the required AdministrativeGender ValueSet",
+  "ruleClass": "requiredBinding",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["terminology.required"],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "pat-bad-gender",
+    "gender": "invalid-code"
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "code-invalid",
+        "path": "Patient.gender"
+      }
+    ]
+  }
+}

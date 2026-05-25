@@ -1,0 +1,50 @@
+{
+  "id": "neg-profile-mismatch",
+  "description": "Patient declares an Observation profile in meta.profile which does not match the resource type",
+  "ruleClass": "profileMatch",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["profile.type"],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "pat-wrong-profile",
+    "meta": {
+      "profile": [
+        "http://test.parity/StructureDefinition/observation-profile"
+      ]
+    },
+    "gender": "male"
+  },
+  "structureDefinitions": [
+    {
+      "resourceType": "StructureDefinition",
+      "url": "http://test.parity/StructureDefinition/observation-profile",
+      "type": "Observation",
+      "snapshot": {
+        "element": [
+          {
+            "path": "Observation.status",
+            "min": 1,
+            "max": "1"
+          }
+        ]
+      }
+    }
+  ],
+  "config": {
+    "profiles": {
+      "Patient": [
+        "http://test.parity/StructureDefinition/observation-profile"
+      ]
+    }
+  },
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "business-rule",
+        "path": "Patient.meta.profile[0]"
+      }
+    ]
+  }
+}

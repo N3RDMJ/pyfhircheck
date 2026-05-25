@@ -1,0 +1,25 @@
+{
+  "id": "neg-wrong-boolean",
+  "description": "Patient.active is a string 'true' instead of boolean true",
+  "ruleClass": "primitiveTypes",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["datatype.invalid"],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "pat-bad-bool",
+    "active": "true",
+    "gender": "male"
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "value",
+        "path": "Patient.active"
+      }
+    ]
+  }
+}

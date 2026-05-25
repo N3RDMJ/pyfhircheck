@@ -1,0 +1,40 @@
+{
+  "id": "neg-choice-multiple",
+  "description": "MedicationRequest has both medicationCodeableConcept and medicationReference (only one choice allowed)",
+  "ruleClass": "choiceTypes",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["choice.multiple"],
+  "resource": {
+    "resourceType": "MedicationRequest",
+    "id": "medreq-multi-choice",
+    "status": "active",
+    "intent": "order",
+    "subject": {
+      "reference": "Patient/1"
+    },
+    "medicationCodeableConcept": {
+      "coding": [
+        {
+          "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+          "code": "1049502",
+          "display": "Acetaminophen"
+        }
+      ]
+    },
+    "medicationReference": {
+      "reference": "Medication/med-1"
+    }
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "structure",
+        "path": "MedicationRequest"
+      }
+    ]
+  }
+}

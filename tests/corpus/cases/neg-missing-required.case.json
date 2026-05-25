@@ -1,0 +1,32 @@
+{
+  "id": "neg-missing-required",
+  "description": "Observation missing required status field",
+  "ruleClass": "requiredFields",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["cardinality.min"],
+  "resource": {
+    "resourceType": "Observation",
+    "id": "obs-no-status",
+    "code": {
+      "coding": [
+        {
+          "system": "http://loinc.org",
+          "code": "8867-4",
+          "display": "Heart rate"
+        }
+      ]
+    }
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "required",
+        "path": "Observation.status"
+      }
+    ]
+  }
+}

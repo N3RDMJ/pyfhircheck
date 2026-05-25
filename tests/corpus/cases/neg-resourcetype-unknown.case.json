@@ -1,0 +1,23 @@
+{
+  "id": "neg-resourcetype-unknown",
+  "description": "Resource has an unrecognized resourceType 'FakeResource'",
+  "ruleClass": "resourceType",
+  "expectedStatus": "FAIL",
+  "expectedIssueCodes": ["resourceType.unknown"],
+  "resource": {
+    "resourceType": "FakeResource",
+    "id": "fake-1"
+  },
+  "structureDefinitions": [],
+  "config": null,
+  "oracle": {
+    "status": "FAIL",
+    "issues": [
+      {
+        "severity": "error",
+        "code": "invalid",
+        "path": "resourceType"
+      }
+    ]
+  }
+}

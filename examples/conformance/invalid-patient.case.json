@@ -1,0 +1,22 @@
+{
+  "expectedStatus": "FAIL",
+  "expectedIssues": [
+    {
+      "severity": "error",
+      "code": "datatype.invalid",
+      "path": "Patient.id",
+      "source": "datatype"
+    },
+    {
+      "severity": "error",
+      "code": "terminology.required",
+      "path": "Patient.gender",
+      "source": "terminology"
+    }
+  ],
+  "resource": {
+    "resourceType": "Patient",
+    "id": "bad id",
+    "gender": "not-a-code"
+  }
+}

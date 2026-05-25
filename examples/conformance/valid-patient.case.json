@@ -1,0 +1,8 @@
+{
+  "expectedStatus": "PASS",
+  "resource": {
+    "resourceType": "Patient",
+    "id": "pat-1",
+    "gender": "female"
+  }
+}

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyfhircheck"
+version = "0.1.0"
+description = "Python FHIR R4 conformance validator with evidence and drift detection"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "pyfhircheck contributors" }]
+license = { text = "MIT" }
+dependencies = ["fhirpathpy>=2.2.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+pyfhircheck = "pyfhircheck.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

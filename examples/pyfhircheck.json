@@ -1,0 +1,34 @@
+{
+  "fhirVersion": "4.0.1",
+  "enabledIGs": [
+    "example.local"
+  ],
+  "packages": [],
+  "packageCacheDir": ".pyfhircheck/packages",
+  "localPackagePaths": [
+    "examples/patient-profile.json"
+  ],
+  "remotePackageSources": [],
+  "terminology": {
+    "mode": "local"
+  },
+  "profiles": {
+    "Patient": [
+      "http://example.org/fhir/StructureDefinition/patient-with-identifier"
+    ]
+  },
+  "severityPolicy": {},
+  "ciFailureThreshold": "error",
+  "customRules": {
+    "patientIdentifierSystem": "https://hospital.example/mrn",
+    "encounterRequiresPatient": true,
+    "bundleRequiredResourceTypes": [
+      "Patient"
+    ],
+    "resolveLocalReferences": true
+  },
+  "evidenceOutputDir": "evidence",
+  "serverValidationTargets": [
+    "Patient"
+  ]
+}

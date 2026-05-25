@@ -1,0 +1,41 @@
+{
+  "resourceType": "Bundle",
+  "id": "bundle-1",
+  "type": "collection",
+  "entry": [
+    {
+      "fullUrl": "Patient/pat-1",
+      "resource": {
+        "resourceType": "Patient",
+        "id": "pat-1",
+        "meta": {
+          "profile": [
+            "http://example.org/fhir/StructureDefinition/patient-with-identifier"
+          ]
+        },
+        "identifier": [
+          {
+            "system": "https://hospital.example/mrn",
+            "value": "12345"
+          }
+        ],
+        "gender": "female"
+      }
+    },
+    {
+      "fullUrl": "Encounter/enc-1",
+      "resource": {
+        "resourceType": "Encounter",
+        "id": "enc-1",
+        "status": "finished",
+        "class": {
+          "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+          "code": "AMB"
+        },
+        "subject": {
+          "reference": "Patient/pat-1"
+        }
+      }
+    }
+  ]
+}

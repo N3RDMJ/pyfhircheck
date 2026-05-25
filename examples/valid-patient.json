@@ -1,0 +1,25 @@
+{
+  "resourceType": "Patient",
+  "id": "pat-1",
+  "meta": {
+    "profile": [
+      "http://example.org/fhir/StructureDefinition/patient-with-identifier"
+    ]
+  },
+  "identifier": [
+    {
+      "system": "https://hospital.example/mrn",
+      "value": "12345"
+    }
+  ],
+  "name": [
+    {
+      "family": "Nguyen",
+      "given": [
+        "Linh"
+      ]
+    }
+  ],
+  "gender": "female",
+  "birthDate": "1980-01-01"
+}

@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+evidence/
+tmp-*-report.json
+tmp-oo.json
+tmp-ci.txt

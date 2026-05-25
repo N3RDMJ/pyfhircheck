@@ -207,6 +207,7 @@ class Validator:
 
     def validate_server(self, base_url: str) -> ValidationReport:
         import json
+        from urllib.error import HTTPError, URLError
         from urllib.request import urlopen
 
         targets = self.config.server_validation_targets or ["Patient"]
@@ -223,7 +224,7 @@ class Validator:
                 try:
                     with urlopen(page_url, timeout=15) as response:
                         data = json.loads(response.read().decode("utf-8"))
-                except Exception as exc:  # noqa: BLE001 - CLI should return a validator runtime error report.
+                except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                     issues.append(ValidationIssue(Severity.ERROR, "server.fetch", f"Could not fetch {page_url}: {exc}", resource_type, path=page_url, source="server"))
                     break
                 payloads.append(data)

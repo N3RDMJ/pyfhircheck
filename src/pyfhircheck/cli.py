@@ -11,6 +11,7 @@ from pyfhircheck.core.engine import Validator
 from pyfhircheck.core.util import file_sha256, iter_json_files
 from pyfhircheck.evidence.drift import compare_reports
 from pyfhircheck.evidence.store import EvidenceStore
+from pyfhircheck.exceptions import PyFhircheckError
 from pyfhircheck.models import Status
 from pyfhircheck.profiles.package import PackageResolver
 from pyfhircheck.reporting.output import agent_report, ci_summary, console_summary, json_report, operation_outcome
@@ -87,6 +88,9 @@ def main(argv: list[str] | None = None) -> int:
             print(console_summary(report, max_issues=max_issues))
             print(f"Evidence: {evidence_path}")
         return _exit_for(report, config)
+    except PyFhircheckError as exc:
+        print(f"Validator error: {exc}")
+        return 2
     except Exception as exc:  # noqa: BLE001 - CLI maps unexpected runtime errors to exit code 2.
         print(f"Validator error: {exc}")
         return 2

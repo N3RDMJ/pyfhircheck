@@ -116,7 +116,7 @@ def _resolve_inner_class(ann: Any) -> type | None:
         if callable(get_model):
             try:
                 return get_model()
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
         return ann
     return None
@@ -255,7 +255,7 @@ def _discover_r4b_models() -> dict[str, type]:
             ):
                 try:
                     rt = obj.get_resource_type()
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     continue
                 if isinstance(rt, str) and rt == attr_name:
                     models[rt] = obj

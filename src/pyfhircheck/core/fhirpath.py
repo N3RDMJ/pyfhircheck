@@ -29,7 +29,7 @@ def _evaluate_with_fhirpathpy(resource: dict[str, Any], expression: str) -> bool
     try:
         compiled = _compile(expression)
         result = compiled(resource, {})
-    except Exception:
+    except (TypeError, ValueError, KeyError, AttributeError):
         return None
     return _coerce_result(result)
 
@@ -45,7 +45,7 @@ def _compile(expression: str):
 def _fhirpathpy_available() -> bool:
     try:
         import fhirpathpy  # noqa: F401
-    except Exception:
+    except ImportError:
         return False
     return True
 

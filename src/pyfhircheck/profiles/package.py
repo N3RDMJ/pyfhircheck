@@ -8,10 +8,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
 from pyfhircheck.config import PackageConfig
+from pyfhircheck.exceptions import PackageError
 
 
 @dataclass(frozen=True)
@@ -184,30 +186,45 @@ def _copy_source(source: str, target: Path) -> None:
     if parsed.scheme in {"http", "https"}:
         payload = _read_url(source, timeout=60)
         if payload is None:
-            raise OSError(f"Could not download package source {source}")
+            raise PackageError(f"Could not download package source {source}")
         target.write_bytes(payload)
         return
     if parsed.scheme == "file":
-        shutil.copyfile(Path(parsed.path), target)
+        source_path = Path(parsed.path)
+        if not source_path.is_file():
+            raise PackageError(f"Package source file not found: {source_path}") from None
+        try:
+            shutil.copyfile(source_path, target)
+        except OSError as exc:
+            raise PackageError(f"Could not copy package source {source_path} to {target}: {exc}") from exc
         return
     source_path = Path(source)
-    if source_path.exists():
-        shutil.copyfile(source_path, target)
+    if source_path.is_file():
+        try:
+            shutil.copyfile(source_path, target)
+        except OSError as exc:
+            raise PackageError(f"Could not copy package source {source_path} to {target}: {exc}") from exc
         return
+    if not parsed.scheme:
+        raise PackageError(f"Package source not found: {source}")
     payload = _read_url(source, timeout=60)
     if payload is None:
-        raise OSError(f"Could not download package source {source}")
+        raise PackageError(f"Could not download package source {source}")
     target.write_bytes(payload)
 
 
 def _read_url(source: str, timeout: int, attempts: int = 3) -> bytes | None:
+    last_error: Exception | None = None
     for attempt in range(attempts):
         try:
             with urlopen(source, timeout=timeout) as response:
                 return response.read()
-        except Exception:  # noqa: BLE001 - package fetching should retry transient network failures.
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+            last_error = exc
             if attempt < attempts - 1:
                 time.sleep(0.2 * (attempt + 1))
+    if last_error is not None:
+        return None
     return None
 
 

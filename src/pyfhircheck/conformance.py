@@ -7,6 +7,7 @@ from typing import Any
 
 from pyfhircheck.config import ValidatorConfig
 from pyfhircheck.core.engine import Validator
+from pyfhircheck.exceptions import ConformanceError
 from pyfhircheck.models import Status
 
 
@@ -40,7 +41,7 @@ def run_conformance_cases(path: Path, config: ValidatorConfig | None = None) -> 
     validator = Validator(config)
     results: list[ConformanceCaseResult] = []
     for case_path in sorted(path.rglob("*.json")) if path.is_dir() else [path]:
-        data = json.loads(case_path.read_text(encoding="utf-8"))
+        data = _load_case_json(case_path)
         resource, source_path = _case_resource(data, case_path)
         expected = data.get("expectedStatus", data.get("expected", "PASS")) if isinstance(data, dict) else "PASS"
         if expected == "ERROR":
@@ -75,15 +76,45 @@ def run_conformance_cases(path: Path, config: ValidatorConfig | None = None) -> 
     }
 
 
+def _load_case_json(case_path: Path) -> Any:
+    try:
+        raw = case_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConformanceError(f"Could not read conformance case {case_path}: {exc}") from exc
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConformanceError(
+            f"Invalid JSON in conformance case {case_path}: {exc.msg} at line {exc.lineno}, column {exc.colno}"
+        ) from exc
+
+
 def _case_resource(data: Any, case_path: Path) -> tuple[dict[str, Any], Path]:
     if not isinstance(data, dict):
-        return data, case_path
+        raise ConformanceError(f"Conformance case {case_path} must contain a JSON object")
     if "resource" in data:
-        return data["resource"], case_path
+        resource = data["resource"]
+        if not isinstance(resource, dict):
+            raise ConformanceError(f"Conformance case {case_path} field 'resource' must be a JSON object")
+        return resource, case_path
     fixture_path = data.get("fixturePath")
     if isinstance(fixture_path, str):
         source_path = (case_path.parent / fixture_path).resolve()
-        return json.loads(source_path.read_text(encoding="utf-8")), source_path
+        if not source_path.is_file():
+            raise ConformanceError(f"Conformance fixture not found for {case_path}: {source_path}")
+        try:
+            raw = source_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ConformanceError(f"Could not read conformance fixture {source_path}: {exc}") from exc
+        try:
+            fixture = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ConformanceError(
+                f"Invalid JSON in conformance fixture {source_path}: {exc.msg} at line {exc.lineno}, column {exc.colno}"
+            ) from exc
+        if not isinstance(fixture, dict):
+            raise ConformanceError(f"Conformance fixture {source_path} must contain a JSON object")
+        return fixture, source_path
     return data, case_path
 
 

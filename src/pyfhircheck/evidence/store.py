@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from pyfhircheck import __version__
+from pyfhircheck.exceptions import EvidenceError
 from pyfhircheck.models import ValidationReport
 from pyfhircheck.reporting.output import operation_outcome
 
@@ -46,4 +47,18 @@ class EvidenceStore:
         candidate = Path(path)
         if candidate.is_dir():
             candidate = candidate / "report.json"
-        return json.loads(candidate.read_text(encoding="utf-8"))
+        if not candidate.is_file():
+            raise EvidenceError(f"Evidence report not found: {candidate}")
+        try:
+            raw = candidate.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise EvidenceError(f"Could not read evidence report {candidate}: {exc}") from exc
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise EvidenceError(
+                f"Invalid JSON in evidence report {candidate}: {exc.msg} at line {exc.lineno}, column {exc.colno}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise EvidenceError(f"Evidence report {candidate} must contain a JSON object")
+        return data

@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pyfhircheck.exceptions import ConfigError
+
 
 @dataclass
 class TerminologyConfig:
@@ -58,7 +60,21 @@ class ValidatorConfig:
     def load(cls, path: str | Path | None) -> "ValidatorConfig":
         if path is None:
             return cls()
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        config_path = Path(path)
+        if not config_path.is_file():
+            raise ConfigError(f"Config file not found: {config_path}")
+        try:
+            raw = config_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ConfigError(f"Could not read config file {config_path}: {exc}") from exc
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ConfigError(
+                f"Invalid JSON in config file {config_path}: {exc.msg} at line {exc.lineno}, column {exc.colno}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise ConfigError(f"Config file {config_path} must contain a JSON object")
         terminology = data.get("terminology", {})
         return cls(
             fhir_version=data.get("fhirVersion", data.get("fhir_version", "4.0.1")),

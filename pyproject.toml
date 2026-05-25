@@ -1,19 +1,56 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyfhircheck"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Python FHIR R4 conformance validator with evidence and drift detection"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "pyfhircheck contributors" }]
-license = { text = "MIT" }
+license = { file = "LICENSE" }
+keywords = ["fhir", "healthcare", "validation", "conformance", "hl7"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Healthcare Industry",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Software Development :: Quality Assurance",
+    "Typing :: Typed",
+]
 dependencies = ["fhirpathpy>=2.2.0"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "mypy>=1.8"]
+dev = ["build>=1.2", "mypy>=1.8", "pytest>=8"]
+
+[project.urls]
+Homepage = "https://github.com/N3RDMJ/pyfhircheck"
+Repository = "https://github.com/N3RDMJ/pyfhircheck"
+Issues = "https://github.com/N3RDMJ/pyfhircheck/issues"
+
+[project.scripts]
+pyfhircheck = "pyfhircheck.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+zip-safe = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pyfhircheck = ["py.typed"]
+
+[tool.setuptools.dynamic]
+version = { attr = "pyfhircheck.__version__" }
 
 [tool.mypy]
 python_version = "3.11"
@@ -26,12 +63,6 @@ strict_equality = true
 [[tool.mypy.overrides]]
 module = "fhirpathpy.*"
 ignore_missing_imports = true
-
-[project.scripts]
-pyfhircheck = "pyfhircheck.cli:main"
-
-[tool.setuptools.packages.find]
-where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

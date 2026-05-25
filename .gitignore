@@ -1,5 +1,8 @@
 .worktrees/
 .venv/
+build/
+dist/
+*.egg
 __pycache__/
 *.py[cod]
 *.egg-info/

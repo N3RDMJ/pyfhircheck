@@ -1,125 +1,263 @@
 # pyfhircheck
 
-pyfhircheck is a Python FHIR R4 validator package and CLI. The long-term goal is functional parity with the HAPI FHIR / HL7 reference validator, with continuous validation evidence and drift detection inspired by MedVertical Records.
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-This first version is intentionally smaller than HAPI, but it is not just a JSON schema checker. It performs an end-to-end validation loop for resources, Bundles, folders, and FHIR server search results, then writes structured reports and evidence that can be compared across runs.
+**Python FHIR R4 validator with evidence, drift detection, and CI-friendly output.**
 
-## Current Capabilities
+Validate FHIR JSON resources, Bundles, folders, or live server search results. pyfhircheck goes beyond JSON schema checks: it enforces structure, profiles, terminology, references, Bundle rules, and FHIRPath invariants, then writes reproducible evidence you can compare across runs.
 
-- Validate one FHIR JSON resource file, one Bundle, a folder of JSON resources, or resources fetched from a FHIR server.
-- Validate base FHIR R4 structure for common clinical resources: Patient, Practitioner, Encounter, Composition, Observation, Condition, Procedure, MedicationRequest, DiagnosticReport, DocumentReference, Organization, and Bundle.
-- Check valid JSON, `resourceType`, required fields, cardinality, choice elements, primitive datatype formats, selected complex datatype fields, unknown elements, contained resources, duplicate ids, modifier extensions, extension shape, Bundle entries, document first `Composition`, message first `MessageHeader`, transaction/batch/history request entries, response Bundle status entries, searchset metadata, duplicate `fullUrl`, and reference consistency across contained resources, Bundle `fullUrl`, relative references, absolute references, conditional references, and configured target types.
-- Enforce profiles from config and `meta.profile`; includes a built-in example profile and can load simple StructureDefinition JSON snapshots/differentials from local files, folders, `.tgz` FHIR packages, or remote package URLs.
-- Resolve configured FHIR package ids/versions into a local cache before validation, and record resolved package evidence in reports.
-- Build effective validation snapshots by overlaying differential StructureDefinitions onto loaded base snapshots when `baseDefinition` is available.
-- Apply StructureDefinition cardinality, fixed values, pattern values, selected terminology bindings, nested differential element constraints, and FHIRPath invariants through `fhirpathpy` with a small fallback evaluator for minimal/offline environments.
-- Validate loaded extension definitions, including extension URL resolution, allowed `value[x]` types, required value cardinality, required nested extension slices, and modifierExtension definitions marked as modifiers.
-- Enforce basic sliced profile elements using value, pattern, and exists discriminators for repeated elements.
-- Load CodeSystem and ValueSet resources from local/remote packages for local terminology membership checks, including explicit concepts, simple compose includes/excludes, expansion contains, and basic filters over code/display/designation/properties.
-- Validate required terminology bindings for selected R4 code elements.
-- Run custom project rules that emit the same internal issue model as native validation.
-- Produce console, JSON, OperationOutcome-compatible, CI summary, and persisted evidence output.
-- Compare two evidence runs for new issues, resolved issues, severity changes, config/profile/terminology changes, and new-error drift.
-- Run conformance fixtures that assert final PASS/WARN/FAIL plus expected internal issues or OperationOutcome-compatible expected issues.
+The long-term goal is functional parity with the [HAPI FHIR](https://hapifhir.io/) / HL7 reference validator, with continuous validation evidence inspired by [MedVertical Records](https://github.com/medvertical).
 
-## Install
+## Why pyfhircheck
+
+| | |
+|---|---|
+| **Deterministic reports** | Every run gets a `runId`, issue fingerprints, config snapshot, and content hash |
+| **Evidence on disk** | JSON report, OperationOutcome, CI summary, and manifest under `evidence/<run-id>/` |
+| **Drift detection** | Compare two runs for new, resolved, and changed validation issues |
+| **Profile-aware** | Load StructureDefinitions from local files, folders, `.tgz` packages, or remote URLs |
+| **Automation-ready** | Machine-readable `--agent-output`, rule catalog, and structured logs to stderr |
+
+> [!NOTE]
+> pyfhircheck is a working foundation with real validation depth, not a drop-in replacement for HAPI in regulated production today. See [Current limitations](#current-limitations) and the [parity roadmap](docs/parity-roadmap.md).
+
+## Features
+
+**Validation inputs**
+
+- Single resource file, Bundle, folder of JSON files, or resources fetched from a FHIR server
+- Incremental folder validation with `--changed-from` (only re-validate changed files, keep reference context)
+
+**Structure and datatypes**
+
+- JSON validity, `resourceType`, cardinality, choice elements, unknown elements
+- Primitive and complex datatype checks for common R4 clinical resources
+- Contained resources, modifier extensions, and extension shape validation
+
+**Profiles and packages**
+
+- Enforced profiles from config and `meta.profile`
+- FHIR NPM package resolution into a local cache (`package-fetch`)
+- Snapshot + differential overlay for effective StructureDefinition elements
+- Profile cardinality, fixed/pattern values, bindings, invariants, slicing (value/pattern/exists discriminators), and extension definitions
+
+**Terminology and references**
+
+- Local CodeSystem / ValueSet membership from packages (`terminology.mode`: `off`, `local`, `strict`)
+- Reference resolution across contained resources, Bundle `fullUrl`, relative, absolute, and conditional references
+
+**Project rules and conformance**
+
+- Configurable custom rules (identifier systems, local reference resolution, Bundle resource types, and more)
+- Conformance fixtures asserting PASS/WARN/FAIL plus expected issues or OperationOutcome-shaped expectations
+
+**Output**
+
+- Console summary, JSON report, OperationOutcome-compatible JSON, CI summary text
+- `--agent-output` for a single JSON object with top issues, rule hints, and evidence path
+- `compare` and `export-evidence` commands for drift workflows
+
+## Installation
+
+**Requirements:** Python 3.11+
 
 ```bash
-python3 -m pip install -e ".[dev]"
+git clone https://github.com/N3RDMJ/pyfhircheck.git
+cd pyfhircheck
+python -m pip install -e ".[dev]"
 ```
 
-## CLI Examples
+Build a wheel locally:
 
 ```bash
+pip install -e ".[dev]"
+python -m build
+```
+
+## Quick start
+
+```bash
+# Validate a resource
 pyfhircheck file examples/valid-patient.json
+
+# Validate with config (profiles, terminology, custom rules)
+pyfhircheck file examples/valid-patient.json -c examples/pyfhircheck.json
+
+# Fail CI on validation errors with structured outputs
+pyfhircheck folder path/to/resources -c pyfhircheck.json \
+  --json-output report.json \
+  --ci-summary-output ci-summary.txt
+```
+
+**Exit codes**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Validation passed, or warnings below `ciFailureThreshold` |
+| `1` | Validation failed (errors, or warnings when threshold is `warning`) |
+| `2` | Config, evidence, package, or runtime error |
+
+## CLI reference
+
+| Command | Description |
+|---------|-------------|
+| `file <path>` | Validate one FHIR JSON resource |
+| `bundle <path>` | Validate one Bundle resource |
+| `folder <path>` | Validate all `*.json` files in a directory |
+| `server <url>` | Validate resources fetched from a FHIR server |
+| `validate-config` | Check a config file without validating resources |
+| `package-fetch` | Resolve configured FHIR packages into the local cache |
+| `conformance <path>` | Run expected PASS/WARN/FAIL fixture cases |
+| `compare <before> <after>` | Diff two evidence runs |
+| `export-evidence <run> <dest>` | Copy an evidence run to another directory |
+| `rules` | Print the machine-readable validation rule catalog |
+| `explain <code>` | Explain a validation rule code |
+
+**Common options** (on `file`, `bundle`, `folder`, `server`)
+
+```bash
+-c, --config PATH                  Validator config JSON
+--json-output PATH                 Write full validation report JSON
+--operation-outcome-output PATH    Write OperationOutcome-compatible JSON
+--ci-summary-output PATH           Write one-line CI summary
+--agent-output                     Single machine-readable JSON object on stdout
+--max-issues N                     Limit issues in console/agent output
+--fail-fast                        Show only the first issue
+--changed-from RUN                 Validate only files changed since a prior evidence run
+--log-level LEVEL                  Structured logs to stderr (DEBUG|INFO|WARNING|ERROR)
+```
+
+**Examples**
+
+```bash
 pyfhircheck file examples/invalid-patient.json --json-output report.json
 pyfhircheck bundle examples/bundle.json -c examples/pyfhircheck.json
-pyfhircheck folder path/to/fhir-json-folder -c examples/pyfhircheck.json
 pyfhircheck server https://hapi.fhir.org/baseR4 -c examples/pyfhircheck.json
-pyfhircheck validate-config -c examples/pyfhircheck.json
 pyfhircheck package-fetch -c examples/pyfhircheck.json
 pyfhircheck conformance examples/conformance
 pyfhircheck compare evidence/run-a evidence/run-b --fail-on-new-errors
-pyfhircheck export-evidence evidence/run-a exported-evidence
+pyfhircheck explain datatype.invalid --json
 ```
 
-Exit codes:
+## Python library
 
-- `0`: validation passed, or warnings did not exceed the configured CI threshold
-- `1`: validation failed
-- `2`: config, validator, or runtime error
+```python
+from pyfhircheck import Validator, ValidationReport
+from pyfhircheck.config import ValidatorConfig
 
-## Config Example
+config = ValidatorConfig.load("pyfhircheck.json")
+validator = Validator(config)
 
-See [examples/pyfhircheck.json](examples/pyfhircheck.json).
+patient = {
+    "resourceType": "Patient",
+    "id": "example",
+    "gender": "female",
+}
 
-Important fields:
+report: ValidationReport = validator.validate_resource(patient)
+print(report.status.value)          # PASS | WARN | FAIL
+print(len(report.errors))           # error count
+print(report.to_dict()["runId"])    # correlation / evidence id
+```
 
-- `fhirVersion`: currently `4.0.1`
-- `enabledIGs`: IG/package labels included in reports
-- `packages`: package ids and versions to resolve into the local cache before validation
-- `packageCacheDir`: where resolved `.tgz` packages are stored
-- `localPackagePaths`: local StructureDefinition JSON files, folders, or `.tgz` FHIR packages
-- `remotePackageSources`: remote `.tgz` package URLs
-- `terminology.mode`: `off`, `local`, or `strict`
-- `profiles`: enforced profile URLs per resource type
-- `ciFailureThreshold`: `error` or `warning`
-- `customRules`: project-specific rule settings
-- `evidenceOutputDir`: persisted evidence location
-- `serverValidationTargets`: resource types fetched by `server`
+Public exports also include typed exceptions (`ConfigError`, `PackageError`, `EvidenceError`, …) and `ValidationIssue`.
 
-## Reports And Evidence
+## Configuration
 
-Every validation run includes:
+See [examples/pyfhircheck.json](examples/pyfhircheck.json) for a working config.
 
-- run id
-- timestamp
-- validator version
-- FHIR version
-- input source
-- resource count
-- configured profiles and IG labels
-- terminology settings
-- error/warning/info counts
-- final `PASS`, `WARN`, or `FAIL`
-- deterministic hash of inputs and config
+| Field | Purpose |
+|-------|---------|
+| `fhirVersion` | FHIR version (`4.0.1` / `R4`) |
+| `packages` | NPM package id + version to resolve before validation |
+| `packageCacheDir` | Local cache for resolved `.tgz` packages |
+| `localPackagePaths` | Local StructureDefinition JSON, folders, or `.tgz` files |
+| `remotePackageSources` | Remote `.tgz` package URLs |
+| `profiles` | Enforced profile URLs per resource type |
+| `terminology.mode` | `off`, `local`, or `strict` |
+| `ciFailureThreshold` | Fail CI on `error` (default) or `warning` |
+| `customRules` | Project-specific rule settings |
+| `evidenceOutputDir` | Where validation evidence is persisted |
+| `serverValidationTargets` | Resource types fetched by `server` |
 
-Evidence is written under `evidence/<run-id>/` with:
+Load config from a dict in code:
 
-- `report.json`
-- `operation-outcome.json`
-- `ci-summary.txt`
+```python
+config = ValidatorConfig.load_dict({"fhirVersion": "4.0.1", "terminology": {"mode": "local"}})
+```
 
-## Custom Rules
+## Evidence and drift
 
-Supported built-in custom rule settings:
+Every validation run writes a directory under `evidence/<run-id>/`:
 
-- `patientIdentifierSystem`: require `Patient.identifier.system`
-- `encounterRequiresPatient`: require `Encounter.subject` to reference a Patient
-- `compositionRequiredSections`: require Composition section titles
-- `bundleRequiredResourceTypes`: require resource types in a Bundle
-- `resolveLocalReferences`: require local references to resolve in the validation set
+```
+evidence/<run-id>/
+├── manifest.json           # run metadata and file index
+├── report.json             # full validation report
+├── operation-outcome.json  # OperationOutcome-compatible issues
+├── ci-summary.txt          # one-line PASS/FAIL summary
+├── config.json             # config snapshot used for the run
+└── inputs.json             # input file content hashes
+```
 
-## CI Usage
+Compare two runs:
 
 ```bash
-pyfhircheck folder fhir-resources -c pyfhircheck.json --json-output validation-report.json --ci-summary-output validation-summary.txt
+pyfhircheck compare evidence/run-a evidence/run-b --fail-on-new-errors
 ```
 
-Use exit code `1` to fail CI when errors are present. Set `ciFailureThreshold` to `warning` if warnings should fail CI too.
+The diff reports new errors, resolved issues, severity changes, and config/profile/terminology drift.
 
-## Conformance Fixtures
+## CI integration
 
-Conformance cases can assert only final status:
+```bash
+pyfhircheck folder fhir-resources -c pyfhircheck.json \
+  --json-output validation-report.json \
+  --operation-outcome-output operation-outcome.json \
+  --ci-summary-output validation-summary.txt
+```
+
+Use exit code `1` to fail the pipeline when validation errors are present. Set `"ciFailureThreshold": "warning"` in config if warnings should also fail CI.
+
+> [!TIP]
+> Pair `--changed-from` with evidence from a previous run to validate only modified files while keeping unchanged resources available for reference resolution.
+
+## Agent and automation output
+
+For LLM agents and CI parsers, use `--agent-output` to emit a single JSON object (`pyfhircheck.agent-output.v1`) with status, truncated top issues (including rule hints and fingerprints), and the evidence path.
+
+```bash
+pyfhircheck file patient.json --agent-output --max-issues 5
+pyfhircheck rules   # machine-readable rule catalog
+pyfhircheck explain profile.required --json
+```
+
+## Observability
+
+Structured JSON logs are written to **stderr** (stdout stays clean for `--agent-output` and piped JSON).
+
+```bash
+export PYFHIRCHECK_LOG_LEVEL=INFO      # default: WARNING
+export PYFHIRCHECK_LOG_FORMAT=json   # or console
+
+pyfhircheck file patient.json --log-level INFO
+```
+
+Logs include correlation IDs, run timing, package download retries, and validation summaries.
+
+## Conformance fixtures
+
+Fixture files assert expected validation outcomes. Minimal case:
 
 ```json
 {
   "expectedStatus": "PASS",
-  "resource": {"resourceType": "Patient", "id": "p1"}
+  "resource": {"resourceType": "Patient", "id": "p1", "gender": "female"}
 }
 ```
 
-They can also assert expected issues:
+Issue-level expectations:
 
 ```json
 {
@@ -131,21 +269,26 @@ They can also assert expected issues:
 }
 ```
 
-`expectedOperationOutcome.issue` is also accepted for OperationOutcome-compatible expected issue matching.
+`expectedOperationOutcome.issue` is also accepted for OperationOutcome-compatible matching. Run fixtures with:
 
-## Current Gaps Versus HAPI / HL7 Validator
+```bash
+pyfhircheck conformance examples/conformance
+```
 
-This version does not yet provide full HL7-compatible StructureDefinition snapshot generation for every differential edge case, complete slicing/reslicing semantics, complete resource coverage, HAPI-identical FHIRPath edge-case behavior, authenticated/private package registries, full ValueSet expansion semantics for all filter operators/imports/inactive/version handling, all invariants, all extension slicing/profile edge cases, every Bundle/reference edge case, or complete HL7 test-case parity. It is a working foundation with deterministic outputs and evidence, not a replacement for HAPI in regulated production validation.
+## Development
 
-## Roadmap Toward Fuller Parity
+```bash
+pip install -e ".[dev]"
+pytest tests/ -v
+mypy src/pyfhircheck/
+python -m build
+```
 
-See [docs/parity-roadmap.md](docs/parity-roadmap.md) for the parity gates.
+## Current limitations
 
-1. Load official HL7 R4 definitions and validate all resources/elements.
-2. Implement full snapshot generation and differential merging.
-3. Add full FHIRPath invariant evaluation with compiled expression caching.
-4. Implement slicing discriminators and extension profile validation.
-5. Add NPM package download/cache support for IGs.
-6. Add terminology server integration with local-first caching.
-7. Build an HL7 `fhir-test-cases` conformance harness.
-8. Expand server validation to paging, compartments, and dataset-level consistency checks.
+> [!WARNING]
+> pyfhircheck does not yet provide full HL7-compatible snapshot generation for every differential edge case, complete slicing/reslicing semantics, HAPI-identical FHIRPath behavior, authenticated private package registries, exhaustive ValueSet expansion, or measured HL7 `fhir-test-cases` parity. Treat it as an evidence-first validator foundation, not a certified HAPI replacement.
+
+## Roadmap
+
+See [docs/parity-roadmap.md](docs/parity-roadmap.md) for parity gates and current status against HAPI / HL7 validator behavior.

@@ -60,19 +60,24 @@ The long-term goal is functional parity with the [HAPI FHIR](https://hapifhir.io
 
 ## Installation
 
-**Requirements:** Python 3.11+
+**Requirements:** Python 3.11+ and [uv](https://docs.astral.sh/uv/)
 
 ```bash
 git clone https://github.com/N3RDMJ/pyfhircheck.git
 cd pyfhircheck
-python -m pip install -e ".[dev]"
+uv sync
 ```
+
+This creates `.venv`, installs locked dependencies from `uv.lock`, and installs pyfhircheck in editable mode with dev tools (pytest, mypy, build).
+
+> [!TIP]
+> Without uv, use `pip install -e ".[dev]"` — the project stays compatible with standard PEP 517 tooling.
 
 Build a wheel locally:
 
 ```bash
-pip install -e ".[dev]"
-python -m build
+uv sync
+uv run python -m build
 ```
 
 ## Quick start
@@ -278,11 +283,13 @@ pyfhircheck conformance examples/conformance
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-pytest tests/ -v
-mypy src/pyfhircheck/
-python -m build
+uv sync
+uv run pytest tests/ -v
+uv run mypy src/pyfhircheck/
+uv run python -m build
 ```
+
+Copy [docs/github-ci-workflow.yml](docs/github-ci-workflow.yml) to `.github/workflows/ci.yml` to enable GitHub Actions CI.
 
 ## Current limitations
 

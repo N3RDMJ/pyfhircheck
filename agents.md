@@ -44,29 +44,29 @@ CustomRuleExecutor
 ## Commands
 
 ```bash
-# Install (editable)
-pip install -e ".[dev]"
+# Install (editable, with dev tools)
+uv sync
 
 # Run tests
-python -m pytest tests/ -v
+uv run pytest tests/ -v
 
 # Run tests with coverage
-python -m pytest tests/ --cov=pyfhircheck --cov-report=term-missing
+uv run pytest tests/ --cov=pyfhircheck --cov-report=term-missing
 
 # Type check
-mypy src/pyfhircheck/
+uv run mypy src/pyfhircheck/
 
 # Lint
-ruff check src/ tests/
+uv run ruff check src/ tests/
 
 # Format
-ruff format src/ tests/
+uv run ruff format src/ tests/
 
 # Run the validator CLI
-python -m pyfhircheck validate <resource.json>
+uv run pyfhircheck validate <resource.json>
 
 # Run conformance test suite against HL7 fhir-test-cases
-python -m pytest tests/conformance/ -v --tb=short
+uv run pytest tests/conformance/ -v --tb=short
 ```
 
 ## Code standards

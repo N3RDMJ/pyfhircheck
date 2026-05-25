@@ -7,7 +7,7 @@
 
 Validate FHIR JSON resources, Bundles, folders, or live server search results. pyfhircheck goes beyond JSON schema checks: it enforces structure, profiles, terminology, references, Bundle rules, and FHIRPath invariants, then writes reproducible evidence you can compare across runs.
 
-The long-term goal is functional parity with the [HAPI FHIR](https://hapifhir.io/) / HL7 reference validator, with continuous validation evidence inspired by [MedVertical Records](https://github.com/medvertical).
+Currently at **79.9% parity** (107/134 matches) with the [HAPI FHIR](https://hapifhir.io/) reference validator on the official [HL7 fhir-test-cases](https://github.com/FHIR/fhir-test-cases) suite. Validation evidence output inspired by [MedVertical Records](https://github.com/medvertical).
 
 ## Why pyfhircheck
 
@@ -20,7 +20,7 @@ The long-term goal is functional parity with the [HAPI FHIR](https://hapifhir.io
 | **Automation-ready** | Machine-readable `--agent-output`, rule catalog, and structured logs to stderr |
 
 > [!NOTE]
-> pyfhircheck is a working foundation with real validation depth, not a drop-in replacement for HAPI in regulated production today. See [Current limitations](#current-limitations) and the [parity roadmap](docs/parity-roadmap.md).
+> pyfhircheck is a working validator with real validation depth covering structure, profiles, terminology, extensions, references, and Bundle semantics. See [HL7 parity](#hl7-parity) for current coverage and [Current limitations](#current-limitations) for known gaps.
 
 ## Features
 
@@ -291,10 +291,34 @@ uv run python -m build
 
 Copy [docs/github-ci-workflow.yml](docs/github-ci-workflow.yml) to `.github/workflows/ci.yml` to enable GitHub Actions CI.
 
+## HL7 parity
+
+pyfhircheck is tested against the official [HL7 fhir-test-cases](https://github.com/FHIR/fhir-test-cases) conformance suite. Each test case includes a FHIR resource and the expected HAPI validator outcome.
+
+| Metric | Value |
+|--------|-------|
+| Total R4 JSON cases evaluated | 134 |
+| Matches (same pass/fail as HAPI) | 107 |
+| False positives (we flag errors, HAPI passes) | 4 |
+| False negatives (HAPI flags errors, we pass) | 23 |
+| Parity | **79.9%** |
+
+Run the parity suite yourself:
+
+```python
+from pathlib import Path
+from pyfhircheck.parity.hl7_runner import run_hl7_test_cases, format_hl7_report
+
+report = run_hl7_test_cases(Path("/tmp/fhir-test-cases"), Path(".pyfhircheck/packages"))
+print(format_hl7_report(report))
+```
+
+Remaining gaps are primarily in display name validation (requires external LOINC/CVX terminology data), advanced Bundle semantics, and StructureDefinition meta-validation.
+
 ## Current limitations
 
 > [!WARNING]
-> pyfhircheck does not yet provide full HL7-compatible snapshot generation for every differential edge case, complete slicing/reslicing semantics, HAPI-identical FHIRPath behavior, authenticated private package registries, exhaustive ValueSet expansion, or measured HL7 `fhir-test-cases` parity. Treat it as an evidence-first validator foundation, not a certified HAPI replacement.
+> pyfhircheck covers structure, profiles, terminology, extensions, references, invariants, and Bundle validation but does not yet handle: full HL7-compatible snapshot generation for every differential edge case, complete slicing/reslicing semantics, HAPI-identical FHIRPath behavior for all expressions, authenticated private package registries, exhaustive ValueSet expansion against remote terminology servers, or XML/narrative validation.
 
 ## Roadmap
 

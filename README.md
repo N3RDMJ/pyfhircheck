@@ -289,7 +289,7 @@ uv run mypy src/pyfhircheck/
 uv run python -m build
 ```
 
-Copy [docs/github-ci-workflow.yml](docs/github-ci-workflow.yml) to `.github/workflows/ci.yml` to enable GitHub Actions CI.
+GitHub Actions CI runs lint, type check, tests, and build on every push and PR. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## HL7 parity
 

@@ -40,6 +40,25 @@ pyfhircheck does not yet have HAPI FHIR Validator parity. This roadmap defines t
 
 ## Current Status
 
-The project now has a package-derived definition path, `.tgz` loading, remote package URL loading, configured package id/version resolution into a local cache, resolved package evidence in reports, base snapshot plus differential overlay for effective StructureDefinition elements, differential profile constraint enforcement for top-level and nested element paths, root-level StructureDefinition invariant retention, cached `fhirpathpy` invariant evaluation with fallback behavior, loaded extension definition checks for URL/value[x]/nested slices/modifierExtension safety, basic slicing enforcement for value/pattern/exists discriminators on repeated elements, reference checks for contained resources, Bundle `fullUrl`, relative references, absolute references, conditional references, and target types, Bundle type checks for document/message/transaction/batch/response/searchset/history workflows, package CodeSystem/ValueSet loading with simple include/exclude/filter expansion, a conformance harness for expected PASS/WARN/FAIL fixtures plus issue-level/OperationOutcome-style expectations, evidence output, and drift comparison.
+**91.1% parity** (123/135 matches) against the HL7 fhir-test-cases suite (R4 JSON cases).
 
-Remaining parity gaps are full HL7-compatible snapshot generation for every differential edge case, complete slicing semantics including type/profile discriminators and reslicing, HAPI-identical FHIRPath edge-case behavior, complete terminology expansion handling for all filter operators/imports/inactive/version semantics, full extension slicing/profile semantics, full Bundle/reference edge-case rules, and measured HL7 test-case pass rate.
+| Gate | Status |
+|------|--------|
+| Official package coverage | Done — `.tgz` loading, remote packages, lazy resource definitions, FHIRPath system type mapping, contentReference handling |
+| Profile and IG support | Done — snapshot merge, cardinality, fixed/pattern values, bindings, invariants, slicing (value/pattern/exists/type discriminators), extension definitions, choice[x] binding resolution |
+| FHIRPath parity | Partial — `fhirpathpy` backend with LRU caching, hardcoded fallbacks for unsupported expressions (per-1, Period comparison) |
+| Terminology parity | Done — package CodeSystem/ValueSet loading, include/exclude/filter expansion, display name validation, unresolved system tracking |
+| Reference and Bundle parity | Done — contained, Bundle-local, absolute, conditional, URN references, versioned duplicate detection, searchset validation, document/transaction/batch/history rules |
+| HL7 conformance suite | Done — reproducible harness in `pyfhircheck.parity.hl7_runner` |
+| Evidence and drift | Done — deterministic hashes, config snapshots, package versions, drift comparison |
+
+### Remaining gaps (12 mismatches)
+
+- **Display name validation** (4 cases) — requires external LOINC/CVX terminology data not bundled in the R4 core package
+- **Versioned Bundle reference resolution** (2 cases) — ambiguous references with multiple versioned entries, CHECK_EXISTS_AND_TYPE validation
+- **Extension context matching** (1 case) — parent path acceptance for primitive child element contexts
+- **XHTML narrative validation** (1 case) — txt-1 constraint and invalid attribute detection
+- **Advanced slicing** (1 case) — duplicate slicing definitions on extension elements
+- **URN reference resolution** (1 case) — NarrativeLink extension validation and document entry reachability
+- **Profile magic codes** (1 case) — vital signs body temperature LOINC code enforcement
+- **Package-local terminology** (1 case) — ValueSet membership from custom IG packages

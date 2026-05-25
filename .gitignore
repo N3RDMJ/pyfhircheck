@@ -12,6 +12,7 @@ evidence/
 tmp-*-report.json
 tmp-oo.json
 tmp-ci.txt
+plan.md
 .pyfhircheck/
 .claude/projects/
 .claude/settings*

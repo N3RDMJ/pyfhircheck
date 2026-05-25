@@ -12,7 +12,7 @@ from pyfhircheck.core.util import file_sha256, iter_json_files
 from pyfhircheck.evidence.drift import compare_reports
 from pyfhircheck.evidence.store import EvidenceStore
 from pyfhircheck.exceptions import PyFhircheckError
-from pyfhircheck.models import Status
+from pyfhircheck.models import Status, ValidationReport
 from pyfhircheck.profiles.package import PackageResolver
 from pyfhircheck.reporting.output import agent_report, ci_summary, console_summary, json_report, operation_outcome
 from pyfhircheck.rules.catalog import explain_rule, rule_catalog
@@ -139,7 +139,7 @@ def _common(cmd: argparse.ArgumentParser) -> None:
     cmd.add_argument("--changed-from", help="validate only JSON files changed since a previous evidence run")
 
 
-def _write_requested_outputs(args: argparse.Namespace, report) -> None:
+def _write_requested_outputs(args: argparse.Namespace, report: ValidationReport) -> None:
     if args.json_output:
         Path(args.json_output).write_text(json_report(report), encoding="utf-8")
     if args.operation_outcome_output:
@@ -148,7 +148,7 @@ def _write_requested_outputs(args: argparse.Namespace, report) -> None:
         Path(args.ci_summary_output).write_text(ci_summary(report) + "\n", encoding="utf-8")
 
 
-def _exit_for(report, config: ValidatorConfig) -> int:
+def _exit_for(report: ValidationReport, config: ValidatorConfig) -> int:
     if report.status is Status.FAIL:
         return 1
     if config.ci_failure_threshold == "warning" and report.status is Status.WARN:

@@ -66,12 +66,12 @@ def run_conformance_cases(path: Path, config: ValidatorConfig | None = None) -> 
                 unexpected_issues=tuple(unexpected),
             )
         )
-    passed = sum(1 for result in results if result.passed)
+    passed_count = sum(1 for result in results if result.passed)
     return {
         "total": len(results),
-        "passed": passed,
-        "failed": len(results) - passed,
-        "passRate": passed / len(results) if results else 0.0,
+        "passed": passed_count,
+        "failed": len(results) - passed_count,
+        "passRate": passed_count / len(results) if results else 0.0,
         "results": [result.to_dict() for result in results],
     }
 

@@ -281,7 +281,8 @@ def _element_def(element: dict[str, Any]) -> ElementDef | None:
     type_codes = [type_entry.get("code") for type_entry in element.get("type", []) if isinstance(type_entry, dict)]
     if not type_codes:
         return None
-    binding = element.get("binding") if isinstance(element.get("binding"), dict) else {}
+    binding_raw = element.get("binding")
+    binding: dict[str, Any] = binding_raw if isinstance(binding_raw, dict) else {}
     strength = binding.get("strength")
     value_set = binding.get("valueSet")
     binding_name = value_set.rsplit("/", 1)[-1].split("|")[0] if isinstance(value_set, str) else None

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 import re
-from typing import Any
+from typing import Any, Callable
 
 from pyfhircheck.core.util import get_path, has_path
 
@@ -35,7 +35,7 @@ def _evaluate_with_fhirpathpy(resource: dict[str, Any], expression: str) -> bool
 
 
 @lru_cache(maxsize=2048)
-def _compile(expression: str):
+def _compile(expression: str) -> Callable[[dict[str, Any], dict[str, Any]], Any]:
     from fhirpathpy import compile as compile_fhirpath
 
     return compile_fhirpath(expression)
@@ -91,7 +91,7 @@ def _evaluate_fallback(resource: dict[str, Any], expression: str) -> bool | None
         return value in (None, [], "")
     equals = EQUALS_RE.match(expression)
     if equals:
-        return get_path(resource, _strip_resource_prefix(resource, equals.group(1))) == equals.group(2)
+        return bool(get_path(resource, _strip_resource_prefix(resource, equals.group(1))) == equals.group(2))
     if re.match(r"^[A-Za-z][A-Za-z0-9.]*$", expression):
         return has_path(resource, _strip_resource_prefix(resource, expression))
     return None

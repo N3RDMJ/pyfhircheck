@@ -27,7 +27,7 @@ def _matches_pattern(value: Any, pattern: Any) -> bool:
         if len(value) < len(pattern):
             return False
         return all(_matches_pattern(actual, expected) for actual, expected in zip(value, pattern, strict=False))
-    return value == pattern
+    return bool(value == pattern)
 
 
 def _contained_reference_targets(resource: dict[str, Any]) -> dict[str, str]:
@@ -187,9 +187,11 @@ class Validator:
             candidates = [data]
             if data.get("resourceType") == "Bundle" and isinstance(data.get("entry"), list):
                 candidates.extend(
-                    entry.get("resource")
+                    resource
                     for entry in data["entry"]
-                    if isinstance(entry, dict) and isinstance(entry.get("resource"), dict)
+                    if isinstance(entry, dict)
+                    for resource in (entry.get("resource"),)
+                    if isinstance(resource, dict)
                 )
             for resource in candidates:
                 if isinstance(resource, dict) and (key := resource_key(resource)):
@@ -243,8 +245,11 @@ class Validator:
 
     def _next_link(self, bundle: dict[str, Any]) -> str | None:
         for link in bundle.get("link", []):
-            if isinstance(link, dict) and link.get("relation") == "next" and isinstance(link.get("url"), str):
-                return link["url"]
+            if not isinstance(link, dict) or link.get("relation") != "next":
+                continue
+            url = link.get("url")
+            if isinstance(url, str):
+                return url
         return None
 
     def _validate_bundle(self, bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], list[ValidationIssue], dict[str, dict[str, Any]]]:
@@ -511,28 +516,28 @@ class Validator:
         for field_name, field_value in value.items():
             if field_name in ("id", "extension", "modifierExtension"):
                 continue
-            child_path = f"{path}.{field_name}"
-            child_def = children.get(field_name)
-            if child_def is None:
-                issues.append(ValidationIssue(Severity.ERROR, "element.unknown", f"Unknown element {child_path}", resource_type, resource_id, child_path, source="structure"))
+            field_path = f"{path}.{field_name}"
+            field_def = children.get(field_name)
+            if field_def is None:
+                issues.append(ValidationIssue(Severity.ERROR, "element.unknown", f"Unknown element {field_path}", resource_type, resource_id, field_path, source="structure"))
                 continue
             items = field_value if isinstance(field_value, list) else [field_value]
-            if child_def.max != "*" and isinstance(field_value, list):
-                issues.append(ValidationIssue(Severity.ERROR, "cardinality.max", f"{child_path} must not repeat", resource_type, resource_id, child_path, source="structure"))
+            if field_def.max != "*" and isinstance(field_value, list):
+                issues.append(ValidationIssue(Severity.ERROR, "cardinality.max", f"{field_path} must not repeat", resource_type, resource_id, field_path, source="structure"))
             for idx, item in enumerate(items):
-                item_path = f"{child_path}[{idx}]" if isinstance(field_value, list) else child_path
-                issues.extend(self._validate_type(resource_type, resource_id, item_path, item, child_def, index, contained_refs))
+                item_path = f"{field_path}[{idx}]" if isinstance(field_value, list) else field_path
+                issues.extend(self._validate_type(resource_type, resource_id, item_path, item, field_def, index, contained_refs))
                 child_codes = [item] if isinstance(item, str) else _codeable_concept_codes(item)
-                if child_def.required_binding:
-                    for code in child_codes:
-                        contains = self.terminology.contains(child_def.required_binding, code)
+                if field_def.required_binding:
+                    for bound_code in child_codes:
+                        contains = self.terminology.contains(field_def.required_binding, bound_code)
                         if contains is False:
-                            issues.append(ValidationIssue(Severity.ERROR, "terminology.required", f"Code {code!r} is not in required ValueSet {child_def.required_binding}", resource_type, resource_id, item_path, source="terminology"))
-                if child_def.extensible_binding:
-                    for code in child_codes:
-                        contains = self.terminology.contains(child_def.extensible_binding, code)
+                            issues.append(ValidationIssue(Severity.ERROR, "terminology.required", f"Code {bound_code!r} is not in required ValueSet {field_def.required_binding}", resource_type, resource_id, item_path, source="terminology"))
+                if field_def.extensible_binding:
+                    for bound_code in child_codes:
+                        contains = self.terminology.contains(field_def.extensible_binding, bound_code)
                         if contains is False:
-                            issues.append(ValidationIssue(Severity.WARNING, "terminology.extensible", f"Code {code!r} is not in extensible ValueSet {child_def.extensible_binding}", resource_type, resource_id, item_path, source="terminology"))
+                            issues.append(ValidationIssue(Severity.WARNING, "terminology.extensible", f"Code {bound_code!r} is not in extensible ValueSet {field_def.extensible_binding}", resource_type, resource_id, item_path, source="terminology"))
         return issues
 
     def _validate_complex_type(self, resource_type: str, resource_id: str | None, path: str, value: dict[str, Any], type_name: str) -> list[ValidationIssue]:
@@ -561,25 +566,25 @@ class Validator:
                     item_path = f"{child_path}[{idx}]" if isinstance(item, list) else child_path
                     sub_codes = [sub_item] if isinstance(sub_item, str) else _codeable_concept_codes(sub_item)
                     if elem_def.required_binding:
-                        for code in sub_codes:
-                            contains = self.terminology.contains(elem_def.required_binding, code)
+                        for bound_code in sub_codes:
+                            contains = self.terminology.contains(elem_def.required_binding, bound_code)
                             if contains is False:
-                                issues.append(ValidationIssue(Severity.ERROR, "terminology.required", f"Code {code!r} is not in required ValueSet {elem_def.required_binding}", resource_type, resource_id, item_path, source="terminology"))
+                                issues.append(ValidationIssue(Severity.ERROR, "terminology.required", f"Code {bound_code!r} is not in required ValueSet {elem_def.required_binding}", resource_type, resource_id, item_path, source="terminology"))
                     if elem_def.extensible_binding:
-                        for code in sub_codes:
-                            contains = self.terminology.contains(elem_def.extensible_binding, code)
+                        for bound_code in sub_codes:
+                            contains = self.terminology.contains(elem_def.extensible_binding, bound_code)
                             if contains is False:
-                                issues.append(ValidationIssue(Severity.WARNING, "terminology.extensible", f"Code {code!r} is not in extensible ValueSet {elem_def.extensible_binding}", resource_type, resource_id, item_path, source="terminology"))
+                                issues.append(ValidationIssue(Severity.WARNING, "terminology.extensible", f"Code {bound_code!r} is not in extensible ValueSet {elem_def.extensible_binding}", resource_type, resource_id, item_path, source="terminology"))
                     child_type = elem_def.types[0] if elem_def.types else None
                     if child_type and child_type not in PRIMITIVE_TYPES and isinstance(sub_item, dict) and child_type in self.complex_type_fields:
                         issues.extend(self._validate_complex_type(resource_type, resource_id, item_path, sub_item, child_type))
         if type_name == "Coding":
-            system = value.get("system")
-            code = value.get("code")
-            if isinstance(system, str) and isinstance(code, str):
-                valid = self.terminology.validate_coding(system, code)
+            coding_system = value.get("system")
+            coding_code = value.get("code")
+            if isinstance(coding_system, str) and isinstance(coding_code, str):
+                valid = self.terminology.validate_coding(coding_system, coding_code)
                 if valid is False:
-                    issues.append(ValidationIssue(Severity.ERROR, "terminology.code-system", f"Code {code!r} is not valid in code system {system}", resource_type, resource_id, path, source="terminology"))
+                    issues.append(ValidationIssue(Severity.ERROR, "terminology.code-system", f"Code {coding_code!r} is not valid in code system {coding_system}", resource_type, resource_id, path, source="terminology"))
         if type_name == "Period" and isinstance(value.get("start"), str) and isinstance(value.get("end"), str) and value["start"] > value["end"]:
             issues.append(ValidationIssue(Severity.ERROR, "invariant.period.order", "Period.start must not be after Period.end", resource_type, resource_id, path, source="invariant"))
         return issues
@@ -627,6 +632,8 @@ class Validator:
         resource_type = resource.get("resourceType")
         resource_id = resource.get("id")
         issues: list[ValidationIssue] = []
+        if not isinstance(resource_type, str):
+            return issues
         meta = resource.get("meta", {})
         declared = meta.get("profile", []) if isinstance(meta, dict) else []
         if declared and not isinstance(declared, list):
@@ -682,12 +689,12 @@ class Validator:
                         issues.append(ValidationIssue(Severity.ERROR, "profile.binding.required", f"Code {code!r} is not in required profile ValueSet {value_set}", resource_type, resource_id, f"{resource_type}.{field}", profile_url, source="profile"))
                     elif contains is False and strength == "extensible":
                         issues.append(ValidationIssue(Severity.WARNING, "profile.binding.extensible", f"Code {code!r} is not in extensible profile ValueSet {value_set}", resource_type, resource_id, f"{resource_type}.{field}", profile_url, source="profile"))
-            for key, severity, expression in profile.invariants:
+            for key, invariant_severity, expression in profile.invariants:
                 if key in _SKIP_INVARIANTS:
                     continue
                 result = evaluate(resource, expression)
                 if result is False:
-                    issue_severity = Severity.ERROR if severity == "error" else Severity.WARNING
+                    issue_severity = Severity.ERROR if invariant_severity == "error" else Severity.WARNING
                     issues.append(ValidationIssue(issue_severity, f"profile.invariant.{key}", f"FHIRPath invariant failed: {expression}", resource_type, resource_id, resource_type, profile_url, source="fhirpath"))
                 elif result is None:
                     issues.append(ValidationIssue(Severity.WARNING, f"profile.invariant.unsupported.{key}", f"FHIRPath invariant is not supported by the lightweight evaluator: {expression}", resource_type, resource_id, resource_type, profile_url, source="fhirpath"))
@@ -747,9 +754,9 @@ class Validator:
                 parent_values = self._choice_type_values(resource, sliced_path)
             else:
                 parent_values = values_at_path(resource, sliced_path)
-            matched = sliced_paths_matched.get(sliced_path, set())
+            matched_indices_for_path = sliced_paths_matched.get(sliced_path, set())
             for idx, value in enumerate(parent_values):
-                if idx not in matched:
+                if idx not in matched_indices_for_path:
                     issues.append(ValidationIssue(Severity.ERROR, "profile.slice.closed", f"Element at {resource_type}.{sliced_path}[{idx}] does not match any defined slice", resource_type, resource_id, f"{resource_type}.{sliced_path}[{idx}]", profile_url, source="profile"))
         return issues
 
@@ -798,7 +805,7 @@ class Validator:
             if slice_constraint.pattern is not None:
                 return _matches_pattern(value, slice_constraint.pattern)
             if slice_constraint.fixed is not None:
-                return value == slice_constraint.fixed
+                return bool(value == slice_constraint.fixed)
         constraint = (slice_constraint.elements or {}).get(path)
         if constraint is not None:
             return self._matches_element_constraint(value, path, constraint)
@@ -813,12 +820,12 @@ class Validator:
             return False
         if path == "$this":
             if "_choiceType" in value:
-                return value["_choiceType"] == slice_constraint.type_code
+                return bool(value["_choiceType"] == slice_constraint.type_code)
             if "resourceType" in value:
-                return value["resourceType"] == slice_constraint.type_code
+                return bool(value["resourceType"] == slice_constraint.type_code)
             for suffix, fhir_type in VALUE_FIELD_TYPES.items():
                 if suffix in value:
-                    return fhir_type == slice_constraint.type_code
+                    return bool(fhir_type == slice_constraint.type_code)
             return False
         target_values = values_at_path(value, path)
         if not target_values:
@@ -826,12 +833,12 @@ class Validator:
         for target in target_values:
             if isinstance(target, dict):
                 if "_choiceType" in target:
-                    return target["_choiceType"] == slice_constraint.type_code
+                    return bool(target["_choiceType"] == slice_constraint.type_code)
                 if "resourceType" in target:
-                    return target["resourceType"] == slice_constraint.type_code
+                    return bool(target["resourceType"] == slice_constraint.type_code)
                 for suffix, fhir_type in VALUE_FIELD_TYPES.items():
                     if suffix in target:
-                        return fhir_type == slice_constraint.type_code
+                        return bool(fhir_type == slice_constraint.type_code)
         return False
 
     def _matches_element_constraint(self, value: dict[str, Any], path: str, constraint: Any) -> bool:

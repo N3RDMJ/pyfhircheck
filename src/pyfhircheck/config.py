@@ -8,6 +8,53 @@ from typing import Any
 from pyfhircheck.exceptions import ConfigError
 
 
+def _config_str(data: dict[str, Any], *keys: str, default: str) -> str:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, str):
+            return value
+    return default
+
+
+def _config_str_list(data: dict[str, Any], *keys: str) -> list[str]:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, str)]
+    return []
+
+
+def _config_str_dict(data: dict[str, Any], *keys: str) -> dict[str, list[str]]:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, dict):
+            return {
+                str(code_system): [code for code in codes if isinstance(code, str)]
+                for code_system, codes in value.items()
+                if isinstance(codes, list)
+            }
+    return {}
+
+
+def _config_profiles(data: dict[str, Any]) -> dict[str, list[str]]:
+    value = data.get("profiles")
+    if not isinstance(value, dict):
+        return {}
+    profiles: dict[str, list[str]] = {}
+    for resource_type, urls in value.items():
+        if isinstance(urls, list):
+            profiles[str(resource_type)] = [url for url in urls if isinstance(url, str)]
+    return profiles
+
+
+def _config_dict(data: dict[str, Any], *keys: str) -> dict[str, Any]:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, dict):
+            return dict(value)
+    return {}
+
+
 @dataclass
 class TerminologyConfig:
     mode: str = "local"
@@ -75,37 +122,42 @@ class ValidatorConfig:
             ) from exc
         if not isinstance(data, dict):
             raise ConfigError(f"Config file {config_path} must contain a JSON object")
-        terminology = data.get("terminology", {})
+        terminology_raw = data.get("terminology", {})
+        terminology = terminology_raw if isinstance(terminology_raw, dict) else {}
         return cls(
-            fhir_version=data.get("fhirVersion", data.get("fhir_version", "4.0.1")),
-            enabled_igs=list(data.get("enabledIGs", data.get("enabled_igs", []))),
+            fhir_version=_config_str(data, "fhirVersion", "fhir_version", default="4.0.1"),
+            enabled_igs=_config_str_list(data, "enabledIGs", "enabled_igs"),
             packages=[
                 PackageConfig(
                     name=str(item.get("name")),
                     version=str(item.get("version", "latest")),
                     registry=str(item.get("registry", "https://packages.fhir.org")),
-                    source=item.get("source"),
+                    source=item.get("source") if isinstance(item.get("source"), str) else None,
                 )
                 for item in data.get("packages", [])
                 if isinstance(item, dict) and item.get("name")
             ],
-            package_cache_dir=data.get("packageCacheDir", data.get("package_cache_dir", ".pyfhircheck/packages")),
-            local_package_paths=list(data.get("localPackagePaths", data.get("local_package_paths", []))),
-            remote_package_sources=list(data.get("remotePackageSources", data.get("remote_package_sources", []))),
+            package_cache_dir=_config_str(data, "packageCacheDir", "package_cache_dir", default=".pyfhircheck/packages"),
+            local_package_paths=_config_str_list(data, "localPackagePaths", "local_package_paths"),
+            remote_package_sources=_config_str_list(data, "remotePackageSources", "remote_package_sources"),
             terminology=TerminologyConfig(
-                mode=terminology.get("mode", "local"),
-                code_systems=dict(terminology.get("codeSystems", terminology.get("code_systems", {}))),
-                ignored_code_systems=list(terminology.get("ignoredCodeSystems", terminology.get("ignored_code_systems", []))),
-                ignored_value_sets=list(terminology.get("ignoredValueSets", terminology.get("ignored_value_sets", []))),
+                mode=_config_str(terminology, "mode", default="local"),
+                code_systems=_config_str_dict(terminology, "codeSystems", "code_systems"),
+                ignored_code_systems=_config_str_list(terminology, "ignoredCodeSystems", "ignored_code_systems"),
+                ignored_value_sets=_config_str_list(terminology, "ignoredValueSets", "ignored_value_sets"),
             ),
-            profiles=dict(data.get("profiles", {})),
+            profiles=_config_profiles(data),
             error_on_unknown_profile=bool(data.get("errorOnUnknownProfile", data.get("error_on_unknown_profile", True))),
             allow_unknown_extensions=bool(data.get("allowUnknownExtensions", data.get("allow_unknown_extensions", False))),
-            severity_policy=dict(data.get("severityPolicy", data.get("severity_policy", {}))),
-            ci_failure_threshold=data.get("ciFailureThreshold", data.get("ci_failure_threshold", "error")),
-            custom_rules=dict(data.get("customRules", data.get("custom_rules", {}))),
-            evidence_output_dir=data.get("evidenceOutputDir", data.get("evidence_output_dir", "evidence")),
-            server_validation_targets=list(data.get("serverValidationTargets", data.get("server_validation_targets", []))),
+            severity_policy={
+                str(rule): severity
+                for rule, severity in (data.get("severityPolicy", data.get("severity_policy", {})) or {}).items()
+                if isinstance(severity, str)
+            },
+            ci_failure_threshold=_config_str(data, "ciFailureThreshold", "ci_failure_threshold", default="error"),
+            custom_rules=_config_dict(data, "customRules", "custom_rules"),
+            evidence_output_dir=_config_str(data, "evidenceOutputDir", "evidence_output_dir", default="evidence"),
+            server_validation_targets=_config_str_list(data, "serverValidationTargets", "server_validation_targets"),
         )
 
     def validate(self) -> list[str]:

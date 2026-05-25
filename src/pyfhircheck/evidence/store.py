@@ -5,6 +5,8 @@ import platform
 import sys
 from pathlib import Path
 
+from typing import Any
+
 from pyfhircheck import __version__
 from pyfhircheck.exceptions import EvidenceError
 from pyfhircheck.models import ValidationReport
@@ -43,7 +45,7 @@ class EvidenceStore:
         return run_dir
 
     @staticmethod
-    def load_report(path: str | Path) -> dict:
+    def load_report(path: str | Path) -> dict[str, Any]:
         candidate = Path(path)
         if candidate.is_dir():
             candidate = candidate / "report.json"

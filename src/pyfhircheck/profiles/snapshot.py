@@ -141,7 +141,7 @@ def _merge_elements(base: list[dict[str, Any]], differential: list[dict[str, Any
 
 
 def _element_key(element: dict[str, Any]) -> str:
-    path = element.get("path", "")
+    path = str(element.get("path", ""))
     slice_name = element.get("sliceName")
     if isinstance(slice_name, str):
         return f"{path}:{slice_name}"
@@ -149,7 +149,7 @@ def _element_key(element: dict[str, Any]) -> str:
 
 
 def _element_key_with_scope(element: dict[str, Any], scope: dict[str, str]) -> str:
-    path = element.get("path", "")
+    path = str(element.get("path", ""))
     slice_name = element.get("sliceName")
     if isinstance(slice_name, str):
         return f"{path}:{slice_name}"

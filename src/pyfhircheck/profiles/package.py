@@ -218,7 +218,8 @@ def _read_url(source: str, timeout: int, attempts: int = 3) -> bytes | None:
     for attempt in range(attempts):
         try:
             with urlopen(source, timeout=timeout) as response:
-                return response.read()
+                payload = response.read()
+                return payload if isinstance(payload, bytes) else bytes(payload)
         except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
             last_error = exc
             if attempt < attempts - 1:

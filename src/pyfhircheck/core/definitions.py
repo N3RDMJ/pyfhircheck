@@ -6,7 +6,7 @@ import types
 import typing
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any
+from typing import Any, Protocol, cast
 
 
 @dataclass(frozen=True)
@@ -57,6 +57,10 @@ _FHIR_PRIMITIVES = set(_PRIMITIVE_MAP.values())
 _COMMON_FIELDS = frozenset(
     {"id", "meta", "implicitRules", "language", "text", "contained", "extension", "modifierExtension"}
 )
+
+
+class _PydanticModel(Protocol):
+    model_fields: dict[str, Any]
 
 
 def _fhir_type_code(ann: Any) -> str:
@@ -115,7 +119,7 @@ def _resolve_inner_class(ann: Any) -> type | None:
         get_model = getattr(ann, "get_model_klass", None)
         if callable(get_model):
             try:
-                return get_model()
+                return cast(type, get_model())
             except (AttributeError, TypeError, ValueError):
                 pass
         return ann
@@ -142,7 +146,8 @@ def _build_children_from_model(cls: type) -> dict[str, ElementDef] | None:
 
 def _build_children_from_model_inner(cls: type) -> dict[str, ElementDef] | None:
     children: dict[str, ElementDef] = {}
-    for name, finfo in cls.model_fields.items():
+    model = cast(_PydanticModel, cls)
+    for name, finfo in model.model_fields.items():
         extra = finfo.json_schema_extra or {}
         if not extra.get("element_property"):
             continue
@@ -171,8 +176,9 @@ def _resource_def_from_model(model_cls: type) -> ResourceDef:
     elements: dict[str, ElementDef] = {}
     required: list[str] = []
     choice_groups: dict[str, list[str]] = {}
+    model = cast(_PydanticModel, model_cls)
 
-    for name, finfo in model_cls.model_fields.items():
+    for name, finfo in model.model_fields.items():
         extra = finfo.json_schema_extra or {}
         if not extra.get("element_property"):
             continue

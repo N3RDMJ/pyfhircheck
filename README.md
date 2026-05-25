@@ -7,7 +7,7 @@
 
 Validate FHIR JSON resources, Bundles, folders, or live server search results. pyfhircheck goes beyond JSON schema checks: it enforces structure, profiles, terminology, references, Bundle rules, and FHIRPath invariants, then writes reproducible evidence you can compare across runs.
 
-Currently at **79.9% parity** (107/134 matches) with the [HAPI FHIR](https://hapifhir.io/) reference validator on the official [HL7 fhir-test-cases](https://github.com/FHIR/fhir-test-cases) suite. Validation evidence output inspired by [MedVertical Records](https://github.com/medvertical).
+Currently at **91.1% parity** (123/135 matches) with the [HAPI FHIR](https://hapifhir.io/) reference validator on the official [HL7 fhir-test-cases](https://github.com/FHIR/fhir-test-cases) suite. Validation evidence output inspired by [MedVertical Records](https://github.com/medvertical).
 
 ## Why pyfhircheck
 
@@ -297,11 +297,11 @@ pyfhircheck is tested against the official [HL7 fhir-test-cases](https://github.
 
 | Metric | Value |
 |--------|-------|
-| Total R4 JSON cases evaluated | 134 |
-| Matches (same pass/fail as HAPI) | 107 |
-| False positives (we flag errors, HAPI passes) | 4 |
-| False negatives (HAPI flags errors, we pass) | 23 |
-| Parity | **79.9%** |
+| Total R4 JSON cases evaluated | 135 |
+| Matches (same pass/fail as HAPI) | 123 |
+| False positives (we flag errors, HAPI passes) | 1 |
+| False negatives (HAPI flags errors, we pass) | 11 |
+| Parity | **91.1%** |
 
 Run the parity suite yourself:
 
@@ -313,7 +313,7 @@ report = run_hl7_test_cases(Path("/tmp/fhir-test-cases"), Path(".pyfhircheck/pac
 print(format_hl7_report(report))
 ```
 
-Remaining gaps are primarily in display name validation (requires external LOINC/CVX terminology data), advanced Bundle semantics, and StructureDefinition meta-validation.
+Remaining gaps are primarily in display name validation (requires external LOINC/CVX terminology data), versioned Bundle reference resolution, XHTML narrative validation, and advanced slicing on extensions.
 
 ## Current limitations
 

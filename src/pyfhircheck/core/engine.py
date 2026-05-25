@@ -230,6 +230,13 @@ class Validator:
         return index
 
     def validate_resource(self, resource: dict[str, Any], input_source: str = "memory") -> ValidationReport:
+        import json as _json
+        resource_size = len(_json.dumps(resource).encode("utf-8"))
+        if resource_size > 1_048_576:
+            return self._report(
+                [ValidationIssue(Severity.ERROR, "structure.size", f"value is longer than permitted maximum length of 1 MB (1048576 bytes)", resource.get("resourceType", ""), resource.get("id"), "", source="structure")],
+                [resource], input_source, [resource], {},
+            )
         if resource.get("resourceType") == "Bundle":
             resources, issues, bundle_index = self._validate_bundle(resource)
             issues.extend(self._validate_resources(resources[1:], bundle_index, bundle_entry=True))
@@ -283,6 +290,25 @@ class Validator:
                 return url
         return None
 
+    def _searchset_expected_types(self, bundle: dict[str, Any]) -> set[str]:
+        for link in bundle.get("link", []):
+            if not isinstance(link, dict) or link.get("relation") != "self":
+                continue
+            url = link.get("url")
+            if not isinstance(url, str):
+                continue
+            from urllib.parse import parse_qs, urlparse
+            parsed = urlparse(url)
+            qs = parse_qs(parsed.query)
+            if "_type" in qs:
+                return {t.strip() for val in qs["_type"] for t in val.split(",")}
+            path_parts = [p for p in parsed.path.rstrip("/").split("/") if p]
+            if path_parts:
+                last = path_parts[-1].split("?")[0]
+                if last and last[0].isupper():
+                    return {last}
+        return set()
+
     def _validate_bundle(self, bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], list[ValidationIssue], dict[str, dict[str, Any]]]:
         issues = self._validate_one(bundle, {})
         issues.extend(self.custom_rules.validate_bundle(bundle))
@@ -302,6 +328,8 @@ class Validator:
             full_url = entry.get("fullUrl")
             if isinstance(full_url, str):
                 full_urls.append(full_url)
+                if bundle_type not in {"transaction", "batch"} and ":" not in full_url.split("/")[0]:
+                    issues.append(ValidationIssue(Severity.ERROR, "bundle.fullurl.absolute", f"The fullUrl must be an absolute URL (not '{full_url}')", "Bundle", bundle.get("id"), f"Bundle.entry[{idx}].fullUrl", source="bundle"))
             resource = entry.get("resource")
             if not isinstance(resource, dict):
                 if bundle_type not in {"transaction-response", "batch-response"}:
@@ -315,9 +343,33 @@ class Validator:
                 index[full_url] = resource
                 if key and full_url.endswith(key) is False and not full_url.startswith("urn:uuid:"):
                     issues.append(ValidationIssue(Severity.WARNING, "bundle.fullurl.mismatch", "Bundle.entry.fullUrl does not match resource type/id", resource.get("resourceType"), resource.get("id"), f"Bundle.entry[{idx}].fullUrl", source="bundle"))
-        duplicates = [url for url, count in Counter(full_urls).items() if count > 1]
-        for url in duplicates:
-            issues.append(ValidationIssue(Severity.ERROR, "bundle.fullurl.duplicate", f"Duplicate Bundle.entry.fullUrl {url}", "Bundle", bundle.get("id"), "Bundle.entry.fullUrl", source="bundle"))
+        url_versions: dict[str, list[str | None]] = {}
+        for entry in entries:
+            if isinstance(entry, dict):
+                url = entry.get("fullUrl")
+                if isinstance(url, str):
+                    res = entry.get("resource", {})
+                    meta = res.get("meta", {}) if isinstance(res, dict) else {}
+                    vid = meta.get("versionId") if isinstance(meta, dict) else None
+                    url_versions.setdefault(url, []).append(vid)
+        for url, count in Counter(full_urls).items():
+            if count <= 1:
+                continue
+            versions = url_versions.get(url, [])
+            all_versioned = all(v is not None for v in versions) and len(set(versions)) == len(versions)
+            if not all_versioned:
+                issues.append(ValidationIssue(Severity.ERROR, "bundle.fullurl.duplicate", f"Duplicate Bundle.entry.fullUrl {url}", "Bundle", bundle.get("id"), "Bundle.entry.fullUrl", source="bundle"))
+        links = bundle.get("link")
+        if isinstance(links, list):
+            link_relations: dict[str, int] = {}
+            for lidx, link in enumerate(links):
+                if isinstance(link, dict):
+                    relation = link.get("relation")
+                    if isinstance(relation, str):
+                        if relation in link_relations:
+                            issues.append(ValidationIssue(Severity.ERROR, "bundle.link.relation.duplicate", f"The link relationship type '{relation}' can only occur once", "Bundle", bundle.get("id"), f"Bundle.link[{lidx}]", source="bundle"))
+                        else:
+                            link_relations[relation] = lidx
         if bundle_type == "document":
             first = resources[1] if len(resources) > 1 else None
             if not isinstance(first, dict) or first.get("resourceType") != "Composition":
@@ -356,6 +408,18 @@ class Validator:
         if bundle_type == "searchset":
             if "total" not in bundle:
                 issues.append(ValidationIssue(Severity.WARNING, "bundle.searchset.total", "searchset Bundle should include total", "Bundle", bundle_id, "Bundle.total", source="bundle"))
+            resource = entry.get("resource")
+            if isinstance(resource, dict):
+                res_type = resource.get("resourceType")
+                res_id = resource.get("id")
+                search_mode = search.get("mode") if isinstance(search, dict) else None
+                if search_mode == "outcome" and res_type != "OperationOutcome":
+                    issues.append(ValidationIssue(Severity.ERROR, "bundle.searchset.outcome", f"This is not an OperationOutcome ({res_type})", "Bundle", bundle_id, f"{path}.resource", source="bundle"))
+                if not res_id and search_mode == "match":
+                    issues.append(ValidationIssue(Severity.ERROR, "bundle.searchset.id", "Search results must have ids", "Bundle", bundle_id, f"{path}.resource", source="bundle"))
+                expected_types = self._searchset_expected_types(bundle)
+                if expected_types and isinstance(res_type, str) and res_type not in expected_types and search_mode not in ("include", "outcome"):
+                    issues.append(ValidationIssue(Severity.ERROR, "bundle.searchset.type", f"This is not a matching resource type for the specified search ({res_type} expecting {sorted(expected_types)})", "Bundle", bundle_id, f"{path}.resource", source="bundle"))
             if search is not None:
                 if not isinstance(search, dict):
                     issues.append(ValidationIssue(Severity.ERROR, "bundle.entry.search", "Bundle.entry.search must be an object", "Bundle", bundle_id, f"{path}.search", source="bundle"))
@@ -370,18 +434,25 @@ class Validator:
     def _validate_resources(self, resources: list[dict[str, Any]], index: dict[str, dict[str, Any]] | None = None, *, bundle_entry: bool = False) -> list[ValidationIssue]:
         index = {**(index or {}), **{key: resource for resource in resources if (key := resource_key(resource))}}
         issues: list[ValidationIssue] = []
-        seen: set[str] = set()
+        seen: dict[str, list[str | None]] = {}
         for resource in resources:
             key = resource_key(resource)
-            if key and key in seen:
-                issues.append(ValidationIssue(Severity.ERROR, "resource.id.duplicate", f"Duplicate resource id {key}", resource.get("resourceType"), resource.get("id"), "id", source="structure"))
             if key:
-                seen.add(key)
+                meta = resource.get("meta")
+                vid = meta.get("versionId") if isinstance(meta, dict) else None
+                if key in seen:
+                    prev_versions = seen[key]
+                    all_versioned = all(v is not None for v in [*prev_versions, vid]) and vid not in prev_versions
+                    if not all_versioned:
+                        issues.append(ValidationIssue(Severity.ERROR, "resource.id.duplicate", f"Duplicate resource id {key}", resource.get("resourceType"), resource.get("id"), "id", source="structure"))
+                    seen[key].append(vid)
+                else:
+                    seen[key] = [vid]
             issues.extend(self._validate_one(resource, index, bundle_entry=bundle_entry))
             issues.extend(self.custom_rules.validate(resource, index))
         return issues
 
-    def _validate_one(self, resource: dict[str, Any], index: dict[str, dict[str, Any]], *, bundle_entry: bool = False) -> list[ValidationIssue]:
+    def _validate_one(self, resource: dict[str, Any], index: dict[str, dict[str, Any]], *, bundle_entry: bool = False, parent_contained_refs: dict[str, str] | None = None) -> list[ValidationIssue]:
         resource_type = resource.get("resourceType")
         resource_id = resource.get("id")
         issues: list[ValidationIssue] = []
@@ -399,6 +470,8 @@ class Validator:
         if definition is None:
             return [ValidationIssue(Severity.ERROR, "resourceType.unknown", f"Unknown or unsupported R4 resourceType {resource_type}", resource_type, resource_id, "resourceType", source="structure")]
         contained_refs = _contained_reference_targets(resource)
+        if parent_contained_refs:
+            contained_refs = {**parent_contained_refs, **contained_refs}
         for field in definition.required:
             if not _choice_field_present(resource, field):
                 issues.append(ValidationIssue(Severity.ERROR, "cardinality.min", f"{resource_type}.{field} is required", resource_type, resource_id, f"{resource_type}.{field}", source="structure"))
@@ -411,9 +484,35 @@ class Validator:
             if element is None:
                 issues.append(ValidationIssue(Severity.ERROR, "element.unknown", f"Unknown element {path}", resource_type, resource_id, path, source="structure"))
                 continue
+            if isinstance(value, list) and len(value) == 0:
+                issues.append(ValidationIssue(Severity.ERROR, "structure.empty-array", "Array cannot be empty - the property should not be present if it has no values", resource_type, resource_id, path, source="structure"))
+                continue
             issues.extend(self._validate_element(resource_type, resource_id, path, value, element, index, contained_refs))
+        for field, value in resource.items():
+            if not field.startswith("_") or not isinstance(value, dict):
+                continue
+            base_field = field[1:]
+            exts = value.get("extension")
+            if isinstance(exts, list):
+                for ext_idx, ext in enumerate(exts):
+                    if isinstance(ext, dict):
+                        issues.extend(self._validate_extension(
+                            resource_type, resource_id,
+                            f"{resource_type}.{base_field}.extension[{ext_idx}]", ext,
+                        ))
         issues.extend(self._validate_meta_profiles(resource, definition, bundle_entry=bundle_entry))
         issues.extend(self._validate_contained(resource))
+        base_profile_url = f"http://hl7.org/fhir/StructureDefinition/{resource_type}"
+        base_profile = self.profile_registry.get(base_profile_url)
+        if base_profile is not None:
+            for key, invariant_severity, expression in base_profile.invariants:
+                if key in _SKIP_INVARIANTS:
+                    continue
+                result = evaluate(resource, expression)
+                if result is False:
+                    sev = Severity.ERROR if invariant_severity == "error" else Severity.WARNING
+                    issues.append(ValidationIssue(sev, f"invariant.{key}", f"Constraint failed: {key}: '{expression}'", resource_type, resource_id, resource_type, source="invariant"))
+            issues.extend(self._validate_profile_element_constraints(resource, base_profile_url, base_profile))
         return issues
 
     def _validate_choice_groups(self, resource: dict[str, Any], definition: Any) -> list[ValidationIssue]:
@@ -585,6 +684,9 @@ class Validator:
                             modifier_context=(ext_field == "modifierExtension"),
                             parent_fhir_type=type_name,
                         ))
+        for field_name, item in value.items():
+            if isinstance(item, list) and len(item) == 0:
+                issues.append(ValidationIssue(Severity.ERROR, "structure.empty-array", "Array cannot be empty - the property should not be present if it has no values", resource_type, resource_id, f"{path}.{field_name}", source="structure"))
         if known_fields is not None:
             type_elements = self.complex_type_elements.get(type_name, {})
             for field_name, item in value.items():
@@ -647,8 +749,14 @@ class Validator:
                         display_error = self.terminology.validate_display(coding_system, coding_code, coding_display)
                         if display_error:
                             issues.append(ValidationIssue(Severity.ERROR, "terminology.display", display_error, resource_type, resource_id, f"{path}.display", source="terminology"))
-        if type_name == "Period" and isinstance(value.get("start"), str) and isinstance(value.get("end"), str) and value["start"] > value["end"]:
-            issues.append(ValidationIssue(Severity.ERROR, "invariant.period.order", "Period.start must not be after Period.end", resource_type, resource_id, path, source="invariant"))
+        if type_name == "Period" and isinstance(value.get("start"), str) and isinstance(value.get("end"), str):
+            s, e = value["start"], value["end"]
+            s_has_time = "T" in s
+            e_has_time = "T" in e
+            if s_has_time != e_has_time and s[:10] == e[:10]:
+                issues.append(ValidationIssue(Severity.ERROR, "invariant.per-1", "Constraint failed: per-1: 'If present, start SHALL have a lower value than end'", resource_type, resource_id, path, source="invariant"))
+            elif s > e:
+                issues.append(ValidationIssue(Severity.ERROR, "invariant.per-1", "Constraint failed: per-1: 'If present, start SHALL have a lower value than end'", resource_type, resource_id, path, source="invariant"))
         if type_name == "Attachment":
             data = value.get("data")
             if isinstance(data, str):
@@ -699,7 +807,8 @@ class Validator:
                 issues.append(ValidationIssue(Severity.ERROR, "extension.value.max", f"Extension {extension_url} allows at most {extension_definition.max_value} value[x]", resource_type, resource_id, path, source="extension"))
             if value_fields and extension_definition.value_types:
                 actual_type = VALUE_FIELD_TYPES.get(value_fields[0], value_fields[0].replace("value", "", 1))
-                if actual_type not in extension_definition.value_types:
+                normalized_allowed = {t.lower() for t in extension_definition.value_types}
+                if actual_type not in extension_definition.value_types and actual_type.lower() not in normalized_allowed:
                     issues.append(ValidationIssue(Severity.ERROR, "extension.value.type", f"Extension {extension_url} value type {actual_type} is not allowed; expected {', '.join(extension_definition.value_types)}", resource_type, resource_id, f"{path}.{value_fields[0]}", source="extension"))
             nested_required = extension_definition.nested_extensions or {}
             nested_values = value.get("extension", [])
@@ -726,10 +835,18 @@ class Validator:
         allowed = {resource_type, "Element", "Resource", "DomainResource"}
         if parent_fhir_type:
             allowed.add(parent_fhir_type)
+            tail = resource_path.rsplit(".", 1)[-1] if "." in resource_path else ""
+            if tail:
+                allowed.add(f"{parent_fhir_type}.{tail}")
         allowed.add(resource_path)
         for ctx_type, ctx_expr in ext_def.contexts:
-            if ctx_type == "element" and ctx_expr in allowed:
-                return True
+            if ctx_type == "element":
+                if ctx_expr in allowed:
+                    return True
+                ctx_type_name = ctx_expr.split(".")[0] if "." in ctx_expr else ctx_expr
+                ctx_tail = ctx_expr[len(ctx_type_name):]
+                if resource_path.endswith(ctx_tail) and ctx_type_name not in r4_all_resource_types():
+                    return True
         return False
 
     def _validate_meta_profiles(self, resource: dict[str, Any], definition: Any, *, bundle_entry: bool = False) -> list[ValidationIssue]:
@@ -788,6 +905,12 @@ class Validator:
                         issues.append(ValidationIssue(Severity.ERROR, "profile.pattern", f"Profile pattern mismatch for {resource_type}.{field}", resource_type, resource_id, f"{resource_type}.{field}", profile_url, source="profile"))
             for field, (strength, value_set) in (profile.bindings or {}).items():
                 value = resource.get(field)
+                if value is None and "[x]" in field:
+                    prefix = field.replace("[x]", "")
+                    for rk in resource:
+                        if rk.startswith(prefix) and rk != prefix and len(rk) > len(prefix) and rk[len(prefix)].isupper():
+                            value = resource[rk]
+                            break
                 vs_key = value_set.split("|")[0].rsplit("/", 1)[-1]
                 codes = [value] if isinstance(value, str) else _codeable_concept_codes(value)
                 for code in codes:
@@ -1105,11 +1228,12 @@ class Validator:
         contained = resource.get("contained", [])
         if contained and not isinstance(contained, list):
             return [ValidationIssue(Severity.ERROR, "contained.type", "contained must be an array", resource.get("resourceType"), resource.get("id"), f"{resource.get('resourceType')}.contained", source="structure")]
+        parent_contained_refs = _contained_reference_targets(resource)
         for idx, child in enumerate(contained):
             if isinstance(child, dict):
                 if not child.get("id"):
                     issues.append(ValidationIssue(Severity.ERROR, "contained.id", "contained resources must have id for local references", resource.get("resourceType"), resource.get("id"), f"{resource.get('resourceType')}.contained[{idx}].id", source="structure"))
-                issues.extend(self._validate_one(child, {}))
+                issues.extend(self._validate_one(child, {}, parent_contained_refs=parent_contained_refs))
             else:
                 issues.append(ValidationIssue(Severity.ERROR, "contained.resource", "contained entries must be resources", resource.get("resourceType"), resource.get("id"), f"{resource.get('resourceType')}.contained[{idx}]", source="structure"))
         return issues

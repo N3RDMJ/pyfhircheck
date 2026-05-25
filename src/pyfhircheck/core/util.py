@@ -10,7 +10,7 @@ from typing import Any
 FHIR_REF_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]+/[A-Za-z0-9\-.]{1,64}(/_history/[A-Za-z0-9\-.]{1,64})?$")
 ID_RE = re.compile(r"^[A-Za-z0-9\-.]{1,64}$")
 DATE_RE = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")
-DATETIME_RE = re.compile(r"^\d{4}(-\d{2}(-\d{2}(T[0-9:.+\-Z]+)?)?)?$")
+DATETIME_RE = re.compile(r"^\d{4}(-\d{2}(-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2}))?)?)?$")
 INSTANT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T.+(Z|[+-]\d{2}:\d{2})$")
 
 

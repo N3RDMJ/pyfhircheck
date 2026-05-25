@@ -241,6 +241,7 @@ def _build_children(parts_prefix: str, child_list: list[tuple[str, dict[str, Any
         else:
             grandchildren.setdefault(child_name, []).append((".".join(parts[1:]), element))
     children: dict[str, ElementDef] = {}
+    choice_groups: dict[str, list[str]] = {}
     for child_name, element in direct.items():
         element_def = _element_def(element)
         if element_def is None:
@@ -260,6 +261,20 @@ def _build_children(parts_prefix: str, child_list: list[tuple[str, dict[str, Any
                     children=nested_children,
                 )
         children[child_name] = element_def
+        if "[x]" in child_name:
+            prefix = child_name.replace("[x]", "")
+            choices = _choice_names(prefix, element)
+            choice_groups[prefix] = choices
+            for choice, type_code in zip(choices, element_def.types, strict=False):
+                children[choice] = ElementDef(
+                    types=(type_code,),
+                    min=0,
+                    max=element_def.max,
+                    required_binding=element_def.required_binding,
+                    extensible_binding=element_def.extensible_binding,
+                    target_types=element_def.target_types,
+                    modifier=element_def.modifier,
+                )
     for child_name, nested in grandchildren.items():
         if child_name not in children:
             nested_children = _build_children(child_name, nested)
@@ -277,10 +292,24 @@ def _direct_child(root: str, path: Any) -> str | None:
     return remainder
 
 
+_FHIRPATH_SYSTEM_TYPE_MAP = {
+    "http://hl7.org/fhirpath/System.String": "string",
+    "http://hl7.org/fhirpath/System.Boolean": "boolean",
+    "http://hl7.org/fhirpath/System.Integer": "integer",
+    "http://hl7.org/fhirpath/System.Decimal": "decimal",
+    "http://hl7.org/fhirpath/System.DateTime": "dateTime",
+    "http://hl7.org/fhirpath/System.Date": "date",
+    "http://hl7.org/fhirpath/System.Time": "time",
+}
+
+
 def _element_def(element: dict[str, Any]) -> ElementDef | None:
-    type_codes = [type_entry.get("code") for type_entry in element.get("type", []) if isinstance(type_entry, dict)]
+    type_codes = [_FHIRPATH_SYSTEM_TYPE_MAP.get(type_entry.get("code"), type_entry.get("code")) for type_entry in element.get("type", []) if isinstance(type_entry, dict)]
     if not type_codes:
-        return None
+        if isinstance(element.get("contentReference"), str):
+            type_codes = ["BackboneElement"]
+        else:
+            return None
     binding_raw = element.get("binding")
     binding: dict[str, Any] = binding_raw if isinstance(binding_raw, dict) else {}
     strength = binding.get("strength")
@@ -322,7 +351,7 @@ def _choice_names(prefix: str, element: dict[str, Any]) -> list[str]:
 
 
 def _python_types(element: dict[str, Any]) -> tuple[type, ...]:
-    type_codes = [type_entry.get("code") for type_entry in element.get("type", []) if isinstance(type_entry, dict)]
+    type_codes = [_FHIRPATH_SYSTEM_TYPE_MAP.get(type_entry.get("code"), type_entry.get("code")) for type_entry in element.get("type", []) if isinstance(type_entry, dict)]
     types: list[type] = []
     for code in type_codes:
         mapped = PYTHON_TYPES.get(str(code))

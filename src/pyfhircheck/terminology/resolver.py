@@ -63,18 +63,19 @@ class TerminologyResolver:
         if value_set in self.config.ignored_code_systems or value_set.rsplit("/", 1)[-1] in self.config.ignored_code_systems:
             return None
         configured = self.config.code_systems.get(value_set)
-        allowed = (
-            set(configured)
-            if configured is not None
-            else VALUE_SETS.get(value_set)
-            or self._expanded_value_set(value_set)
-            or self._expanded_value_set(value_set.rsplit("/", 1)[-1])
-            or set(self.package_code_systems.get(value_set, {}))
-            or set(self.package_code_systems.get(value_set.rsplit("/", 1)[-1], {}))
-        )
-        if allowed is None:
-            return None
-        return code in allowed
+        if configured is not None:
+            return code in set(configured)
+        vs_key = value_set.rsplit("/", 1)[-1]
+        builtin = VALUE_SETS.get(value_set) or VALUE_SETS.get(vs_key)
+        if builtin:
+            return code in builtin
+        expanded = self._expanded_value_set(value_set) or self._expanded_value_set(vs_key)
+        if expanded is not None:
+            return code in expanded
+        cs_codes = self.package_code_systems.get(value_set) or self.package_code_systems.get(vs_key)
+        if cs_codes:
+            return code in cs_codes
+        return None
 
     def evidence(self) -> dict[str, Any]:
         return {
@@ -113,14 +114,23 @@ class TerminologyResolver:
 
     def _expanded_value_set(self, key: str) -> set[str] | None:
         if key in self._value_set_cache:
-            return self._value_set_cache[key]
+            cached = self._value_set_cache[key]
+            return cached if cached is not None else None
         resource = self.package_value_set_definitions.get(key)
         if resource is None:
             return None
         codes: set[str] = set()
+        has_unresolved_system = False
         compose = resource.get("compose", {})
         if isinstance(compose, dict):
             for include in compose.get("include", []):
+                if isinstance(include, dict):
+                    system = include.get("system")
+                    concepts = include.get("concept")
+                    if isinstance(system, str) and not concepts:
+                        resolved = self.package_code_systems.get(system) or self.package_code_systems.get(system.rsplit("/", 1)[-1])
+                        if not resolved:
+                            has_unresolved_system = True
                 codes.update(self._codes_for_include(include))
             for exclude in compose.get("exclude", []):
                 codes.difference_update(self._codes_for_include(exclude))
@@ -128,9 +138,10 @@ class TerminologyResolver:
         if isinstance(expansion, dict):
             for contains in expansion.get("contains", []):
                 codes.update(_expansion_codes(contains))
+        result: set[str] | None = codes if codes or not has_unresolved_system else None
         for resource_key in _resource_keys(resource):
-            self._value_set_cache[resource_key] = codes
-        return codes
+            self._value_set_cache[resource_key] = result
+        return result
 
     def _codes_for_include(self, include: Any) -> set[str]:
         if not isinstance(include, dict):

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pyfhircheck.config import PackageConfig, ValidatorConfig
+from pyfhircheck.config import ValidatorConfig
 from pyfhircheck.core.engine import Validator
 from pyfhircheck.models import Severity
 
@@ -27,6 +27,9 @@ def _build_validator_for_case(case: dict[str, Any], validator_dir: Path, package
     config_data: dict[str, Any] = {"packageCacheDir": str(package_cache), "allow_example_urls": allow_example_urls}
     local_paths: list[str] = []
 
+    if core_vs_path:
+        local_paths.append(core_vs_path)
+
     profiles_list = case.get("profiles")
     if isinstance(profiles_list, list):
         for pf in profiles_list:
@@ -44,21 +47,26 @@ def _build_validator_for_case(case: dict[str, Any], validator_dir: Path, package
                     local_paths.append(str(sf_path))
 
     packages = case.get("packages")
+    npm_packages: list[dict[str, str]] = []
     if isinstance(packages, list):
-        config_data["packages"] = [
-            {"name": pkg.rsplit("#", 1)[0], "version": pkg.rsplit("#", 1)[1] if "#" in pkg else "latest"}
-            for pkg in packages
-            if isinstance(pkg, str)
-        ]
+        for pkg in packages:
+            if not isinstance(pkg, str):
+                continue
+            local_pkg_path = validator_dir / pkg
+            if local_pkg_path.exists():
+                local_paths.append(str(local_pkg_path))
+            elif "#" in pkg:
+                npm_packages.append({"name": pkg.rsplit("#", 1)[0], "version": pkg.rsplit("#", 1)[1]})
+            else:
+                npm_packages.append({"name": pkg, "version": "latest"})
+    if npm_packages:
+        config_data["packages"] = npm_packages
 
     if local_paths:
         config_data["localPackagePaths"] = list(set(local_paths))
 
     config = ValidatorConfig.load_dict(config_data)
-    validator = Validator(config)
-    if core_vs_path:
-        validator.terminology.load_value_sets_from([core_vs_path])
-    return validator
+    return Validator(config)
 
 
 def run_hl7_test_cases(
@@ -80,9 +88,10 @@ def run_hl7_test_cases(
     error_list: list[dict[str, str]] = []
 
     core_vs_path = cache / "hl7.fhir.r4.core-4.0.1.tgz"
-    default_validator = Validator(ValidatorConfig.load_dict({"packageCacheDir": str(cache)}))
+    default_config: dict[str, Any] = {"packageCacheDir": str(cache)}
     if core_vs_path.exists():
-        default_validator.terminology.load_value_sets_from([str(core_vs_path)])
+        default_config["localPackagePaths"] = [str(core_vs_path)]
+    default_validator = Validator(ValidatorConfig.load_dict(default_config))
 
     for case in r4_cases:
         module = case.get("module", "unknown")
@@ -127,9 +136,6 @@ def run_hl7_test_cases(
         hapi_status = "FAIL" if hapi_has_error else "PASS"
 
         validate_contains = case.get("validateContains")
-        if validate_contains == "IGNORE":
-            skipped += 1
-            continue
 
         allow_example_urls = case.get("examples", True) is not False
         needs_custom = any(k in case for k in ("profiles", "supporting", "packages")) or not allow_example_urls
@@ -141,7 +147,11 @@ def run_hl7_test_cases(
                 validator = default_validator
 
             report = validator.validate_resource(resource)
-            pyf_has_error = any(i.severity is Severity.ERROR for i in report.issues)
+            issues = report.issues
+            if validate_contains == "IGNORE":
+                main_type = resource.get("resourceType", "")
+                issues = [i for i in issues if i.path and i.path.startswith(main_type)]
+            pyf_has_error = any(i.severity is Severity.ERROR for i in issues)
             pyf_status = "FAIL" if pyf_has_error else "PASS"
         except Exception as exc:
             error_list.append({"name": case["name"], "module": module, "error": str(exc)})

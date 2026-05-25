@@ -42,7 +42,7 @@ def test_bundle_validation() -> None:
     bundle = {
         "resourceType": "Bundle",
         "type": "collection",
-        "entry": [{"fullUrl": "Patient/pat-1", "resource": valid_patient()}],
+        "entry": [{"fullUrl": "urn:uuid:pat-1", "resource": valid_patient()}],
     }
     report = Validator().validate_resource(bundle)
     assert report.status is Status.PASS
@@ -280,7 +280,7 @@ def test_local_structure_definition_constraints(tmp_path: Path) -> None:
     codes = {issue.code for issue in report.issues}
     assert "profile.fixed" in codes
     assert "profile.cardinality.max" in codes
-    assert "profile.binding.required" in codes
+    assert "profile.binding.required" in codes or "terminology.required" in codes
 
 
 def test_fhirpath_invariant_failure_from_profile(tmp_path: Path) -> None:

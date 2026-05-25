@@ -1,0 +1,6 @@
+{
+  "description": "ISiK Basismodul fixture ISiKAngehoeriger/invalid/RelatedPerson-ISiKAngehoerigerMustermann.json",
+  "expectedStatus": "FAIL",
+  "fixturePath": "../../../../fixtures/isik3-basismodul/ISiKAngehoeriger/invalid/RelatedPerson-ISiKAngehoerigerMustermann.json",
+  "source": "gematik/app-referencevalidator-plugins valmodule-isik3-basismodul/src/main/resources/plugin/test-files/ISiK-Basismodul"
+}

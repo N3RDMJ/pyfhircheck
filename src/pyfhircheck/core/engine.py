@@ -9,10 +9,10 @@ from uuid import uuid4
 
 from pyfhircheck import __version__
 from pyfhircheck.config import ValidatorConfig
-from pyfhircheck.core.definitions import R4_RESOURCES, ElementDef
+from pyfhircheck.core.definitions import R4_RESOURCES, ElementDef, r4_all_resource_types, r4_resource_def
 from pyfhircheck.core.fhirpath import backend_name, evaluate
-from pyfhircheck.core.util import DATE_RE, DATETIME_RE, FHIR_REF_RE, ID_RE, INSTANT_RE, iter_json_files, load_json_file, resource_key, stable_hash, values_at_path
-from pyfhircheck.models import Severity, Status, ValidationIssue, ValidationReport
+from pyfhircheck.core.util import DATE_RE, DATETIME_RE, FHIR_REF_RE, ID_RE, INSTANT_RE, file_sha256, iter_json_files, load_json_file, resource_key, stable_hash, values_at_path
+from pyfhircheck.models import ResourceValidationSummary, Severity, Status, ValidationIssue, ValidationReport
 from pyfhircheck.profiles.loader import ProfileRegistry
 from pyfhircheck.profiles.package import PackageResolver
 from pyfhircheck.profiles.specification import SpecificationDefinitions, merged_complex_types
@@ -88,17 +88,50 @@ VALUE_FIELD_TYPES = {
     "valuePeriod": "Period",
 }
 
+_CHOICE_SUFFIX_TO_FHIR_TYPE: dict[str, str] = {
+    "String": "string", "Boolean": "boolean", "Code": "code",
+    "Uri": "uri", "Url": "url", "Canonical": "canonical",
+    "Integer": "integer", "Decimal": "decimal", "Date": "date",
+    "DateTime": "dateTime", "Instant": "instant", "Time": "time",
+    "Base64Binary": "base64Binary", "Markdown": "markdown",
+    "Id": "id", "Oid": "oid", "Uuid": "uuid",
+    "UnsignedInt": "unsignedInt", "PositiveInt": "positiveInt",
+}
+
+
+_SKIP_INVARIANTS = {"ext-1", "ele-1", "dom-6", "con-1", "bdl-5", "vsd-6"}
+
+
+def _codeable_concept_codes(value: Any) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    codings = value.get("coding")
+    if not isinstance(codings, list):
+        return []
+    return [c["code"] for c in codings if isinstance(c, dict) and isinstance(c.get("code"), str)]
+
+
+def _choice_field_present(resource: dict[str, Any], field: str) -> bool:
+    if "[x]" not in field:
+        return field in resource and resource[field] not in (None, "", [])
+    prefix = field.replace("[x]", "")
+    return any(
+        k.startswith(prefix) and k != prefix and len(k) > len(prefix) and k[len(prefix)].isupper()
+        for k in resource
+    )
+
 
 class Validator:
     def __init__(self, config: ValidatorConfig | None = None):
         self.config = config or ValidatorConfig()
-        self.resolved_packages = PackageResolver(self.config.package_cache_dir).resolve_all(self.config.packages)
+        self.resolved_packages = PackageResolver(self.config.package_cache_dir).resolve_with_dependencies(self.config.packages)
         package_paths = [package.path for package in self.resolved_packages]
         all_local_package_paths = [*package_paths, *self.config.local_package_paths]
         self.profile_registry = ProfileRegistry()
         self.profile_registry.load_paths(all_local_package_paths)
         self.profile_registry.load_remote_sources(self.config.remote_package_sources)
         specification = SpecificationDefinitions.load(all_local_package_paths, self.config.remote_package_sources)
+        self.specification = specification
         self.resource_definitions = {**R4_RESOURCES, **specification.resources}
         self.complex_type_fields = merged_complex_types(specification.complex_types)
         self.loaded_structure_definitions = specification.loaded_structure_definitions
@@ -107,11 +140,25 @@ class Validator:
         self.custom_rules = CustomRuleRunner(self.config.custom_rules)
 
     def validate_path(self, path: Path, input_source: str | None = None) -> ValidationReport:
+        return self.validate_files(iter_json_files(path), input_source or str(path))
+
+    def validate_files(
+        self,
+        file_paths: list[Path],
+        input_source: str = "files",
+        reference_file_paths: list[Path] | None = None,
+    ) -> ValidationReport:
         issues: list[ValidationIssue] = []
         resources: list[dict[str, Any]] = []
         validation_resources: list[dict[str, Any]] = []
         input_payloads: list[Any] = []
-        for file_path in iter_json_files(path):
+        input_hashes: dict[str, str] = {}
+        reference_index = self._reference_index(reference_file_paths or [])
+        for file_path in sorted(file_paths):
+            try:
+                input_hashes[str(file_path)] = file_sha256(file_path)
+            except OSError:
+                pass
             data, error = load_json_file(file_path)
             if error:
                 issues.append(ValidationIssue(Severity.ERROR, "json.invalid", f"Invalid JSON: {error}", path=str(file_path), source="json"))
@@ -127,8 +174,26 @@ class Validator:
                 validation_resources.append(data)
             else:
                 issues.append(ValidationIssue(Severity.ERROR, "json.not-object", "FHIR resource JSON must be an object", path=str(file_path), source="json"))
-        issues.extend(self._validate_resources(validation_resources))
-        return self._report(issues, resources, input_source or str(path), input_payloads)
+        issues.extend(self._validate_resources(validation_resources, reference_index))
+        return self._report(issues, resources, input_source, input_payloads, input_hashes)
+
+    def _reference_index(self, file_paths: list[Path]) -> dict[str, dict[str, Any]]:
+        index: dict[str, dict[str, Any]] = {}
+        for file_path in sorted(file_paths):
+            data, error = load_json_file(file_path)
+            if error or not isinstance(data, dict):
+                continue
+            candidates = [data]
+            if data.get("resourceType") == "Bundle" and isinstance(data.get("entry"), list):
+                candidates.extend(
+                    entry.get("resource")
+                    for entry in data["entry"]
+                    if isinstance(entry, dict) and isinstance(entry.get("resource"), dict)
+                )
+            for resource in candidates:
+                if isinstance(resource, dict) and (key := resource_key(resource)):
+                    index[key] = resource
+        return index
 
     def validate_resource(self, resource: dict[str, Any], input_source: str = "memory") -> ValidationReport:
         if resource.get("resourceType") == "Bundle":
@@ -137,7 +202,7 @@ class Validator:
         else:
             resources = [resource]
             issues = self._validate_resources(resources)
-        return self._report(issues, resources, input_source, [resource])
+        return self._report(issues, resources, input_source, [resource], {})
 
     def validate_server(self, base_url: str) -> ValidationReport:
         import json
@@ -172,7 +237,7 @@ class Validator:
                     validation_resources.append(data)
                     break
         issues.extend(self._validate_resources(validation_resources))
-        return self._report(issues, resources, base_url, payloads)
+        return self._report(issues, resources, base_url, payloads, {})
 
     def _next_link(self, bundle: dict[str, Any]) -> str | None:
         for link in bundle.get("link", []):
@@ -286,14 +351,22 @@ class Validator:
             return [ValidationIssue(Severity.ERROR, "resourceType.required", "resourceType is required", path="resourceType", source="structure")]
         definition = self.resource_definitions.get(resource_type)
         if definition is None:
+            definition = self.specification.resource_def_for(resource_type)
+            if definition is not None:
+                self.resource_definitions[resource_type] = definition
+        if definition is None:
+            definition = r4_resource_def(resource_type)
+            if definition is not None:
+                self.resource_definitions[resource_type] = definition
+        if definition is None:
             return [ValidationIssue(Severity.ERROR, "resourceType.unknown", f"Unknown or unsupported R4 resourceType {resource_type}", resource_type, resource_id, "resourceType", source="structure")]
         contained_refs = _contained_reference_targets(resource)
         for field in definition.required:
-            if field not in resource or resource[field] in (None, "", []):
+            if not _choice_field_present(resource, field):
                 issues.append(ValidationIssue(Severity.ERROR, "cardinality.min", f"{resource_type}.{field} is required", resource_type, resource_id, f"{resource_type}.{field}", source="structure"))
         issues.extend(self._validate_choice_groups(resource, definition))
         for field, value in resource.items():
-            if field == "resourceType":
+            if field == "resourceType" or field.startswith("_"):
                 continue
             element = definition.elements.get(field)
             path = f"{resource_type}.{field}"
@@ -331,14 +404,17 @@ class Validator:
         for idx, item in enumerate(values):
             item_path = f"{path}[{idx}]" if isinstance(value, list) else path
             issues.extend(self._validate_type(resource_type, resource_id, item_path, item, element, index, contained_refs or {}))
-            if element.required_binding and isinstance(item, str):
-                contains = self.terminology.contains(element.required_binding, item)
-                if contains is False:
-                    issues.append(ValidationIssue(Severity.ERROR, "terminology.required", f"Code {item!r} is not in required ValueSet {element.required_binding}", resource_type, resource_id, item_path, source="terminology"))
-            if element.extensible_binding and isinstance(item, str):
-                contains = self.terminology.contains(element.extensible_binding, item)
-                if contains is False:
-                    issues.append(ValidationIssue(Severity.WARNING, "terminology.extensible", f"Code {item!r} is not in extensible ValueSet {element.extensible_binding}", resource_type, resource_id, item_path, source="terminology"))
+            item_codes = [item] if isinstance(item, str) else _codeable_concept_codes(item)
+            if element.required_binding:
+                for code in item_codes:
+                    contains = self.terminology.contains(element.required_binding, code)
+                    if contains is False:
+                        issues.append(ValidationIssue(Severity.ERROR, "terminology.required", f"Code {code!r} is not in required ValueSet {element.required_binding}", resource_type, resource_id, item_path, source="terminology"))
+            if element.extensible_binding:
+                for code in item_codes:
+                    contains = self.terminology.contains(element.extensible_binding, code)
+                    if contains is False:
+                        issues.append(ValidationIssue(Severity.WARNING, "terminology.extensible", f"Code {code!r} is not in extensible ValueSet {element.extensible_binding}", resource_type, resource_id, item_path, source="terminology"))
         return issues
 
     def _validate_type(self, resource_type: str, resource_id: str | None, path: str, value: Any, element: ElementDef, index: dict[str, dict[str, Any]], contained_refs: dict[str, str]) -> list[ValidationIssue]:
@@ -346,20 +422,28 @@ class Validator:
         issues: list[ValidationIssue] = []
         primitive = expected[0]
         ok = True
-        if primitive in {"string", "code", "uri"}:
+        if primitive in {"string", "code", "uri", "canonical", "url", "markdown", "base64Binary", "oid", "uuid", "xhtml"}:
             ok = isinstance(value, str)
         elif primitive == "instant":
             ok = isinstance(value, str) and bool(INSTANT_RE.match(value))
         elif primitive == "boolean":
             ok = isinstance(value, bool)
-        elif primitive == "integer":
+        elif primitive in {"integer", "positiveInt", "unsignedInt"}:
             ok = isinstance(value, int) and not isinstance(value, bool)
+            if ok and primitive == "positiveInt" and value < 1:
+                issues.append(ValidationIssue(Severity.ERROR, "datatype.invalid", f"{path} must be a positive integer", resource_type, resource_id, path, source="datatype"))
+            if ok and primitive == "unsignedInt" and value < 0:
+                issues.append(ValidationIssue(Severity.ERROR, "datatype.invalid", f"{path} must be a non-negative integer", resource_type, resource_id, path, source="datatype"))
+        elif primitive == "decimal":
+            ok = isinstance(value, (int, float)) and not isinstance(value, bool)
         elif primitive == "id":
             ok = isinstance(value, str) and bool(ID_RE.match(value))
         elif primitive == "date":
             ok = isinstance(value, str) and bool(DATE_RE.match(value))
         elif primitive == "dateTime":
             ok = isinstance(value, str) and bool(DATETIME_RE.match(value))
+        elif primitive == "time":
+            ok = isinstance(value, str)
         elif primitive == "Reference":
             ok = isinstance(value, dict)
             ref = value.get("reference") if ok else None
@@ -391,6 +475,9 @@ class Validator:
             ok = isinstance(value, dict)
             if ok:
                 issues.extend(self._validate_extension(resource_type, resource_id, path, value, element.modifier))
+        elif primitive == "BackboneElement" and element.children and isinstance(value, dict):
+            children = self._merged_backbone_children(resource_type, path, element.children)
+            issues.extend(self._validate_backbone(resource_type, resource_id, path, value, children, index, contained_refs))
         else:
             ok = isinstance(value, dict)
             if ok:
@@ -399,22 +486,72 @@ class Validator:
             issues.append(ValidationIssue(Severity.ERROR, "datatype.invalid", f"{path} must be {', '.join(expected)}", resource_type, resource_id, path, source="datatype"))
         return issues
 
+    def _merged_backbone_children(self, resource_type: str, path: str, children: dict[str, ElementDef]) -> dict[str, ElementDef]:
+        r4_def = r4_resource_def(resource_type)
+        if r4_def is None:
+            return children
+        field_name = path.split(".")[-1] if "." in path else path.replace(f"{resource_type}.", "")
+        r4_element = r4_def.elements.get(field_name)
+        if r4_element is None or r4_element.children is None:
+            return children
+        merged = {k: v for k, v in r4_element.children.items() if k not in ("id", "extension", "modifierExtension")}
+        merged.update(children)
+        return merged
+
+    def _validate_backbone(self, resource_type: str, resource_id: str | None, path: str, value: dict[str, Any], children: dict[str, ElementDef], index: dict[str, dict[str, Any]], contained_refs: dict[str, str]) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
+        for child_name, child_def in children.items():
+            child_path = f"{path}.{child_name}"
+            if child_def.min > 0 and (child_name not in value or value[child_name] in (None, "", [])):
+                issues.append(ValidationIssue(Severity.ERROR, "cardinality.min", f"{child_path} is required", resource_type, resource_id, child_path, source="structure"))
+        for field_name, field_value in value.items():
+            if field_name in ("id", "extension", "modifierExtension"):
+                continue
+            child_path = f"{path}.{field_name}"
+            child_def = children.get(field_name)
+            if child_def is None:
+                issues.append(ValidationIssue(Severity.ERROR, "element.unknown", f"Unknown element {child_path}", resource_type, resource_id, child_path, source="structure"))
+                continue
+            items = field_value if isinstance(field_value, list) else [field_value]
+            if child_def.max != "*" and isinstance(field_value, list):
+                issues.append(ValidationIssue(Severity.ERROR, "cardinality.max", f"{child_path} must not repeat", resource_type, resource_id, child_path, source="structure"))
+            for idx, item in enumerate(items):
+                item_path = f"{child_path}[{idx}]" if isinstance(field_value, list) else child_path
+                issues.extend(self._validate_type(resource_type, resource_id, item_path, item, child_def, index, contained_refs))
+                child_codes = [item] if isinstance(item, str) else _codeable_concept_codes(item)
+                if child_def.required_binding:
+                    for code in child_codes:
+                        contains = self.terminology.contains(child_def.required_binding, code)
+                        if contains is False:
+                            issues.append(ValidationIssue(Severity.ERROR, "terminology.required", f"Code {code!r} is not in required ValueSet {child_def.required_binding}", resource_type, resource_id, item_path, source="terminology"))
+                if child_def.extensible_binding:
+                    for code in child_codes:
+                        contains = self.terminology.contains(child_def.extensible_binding, code)
+                        if contains is False:
+                            issues.append(ValidationIssue(Severity.WARNING, "terminology.extensible", f"Code {code!r} is not in extensible ValueSet {child_def.extensible_binding}", resource_type, resource_id, item_path, source="terminology"))
+        return issues
+
     def _validate_complex_type(self, resource_type: str, resource_id: str | None, path: str, value: dict[str, Any], type_name: str) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
         known_fields = self.complex_type_fields.get(type_name)
         if known_fields is None:
             return issues
         for field, item in value.items():
-            if field.startswith("extension"):
+            if field.startswith(("extension", "_")):
                 continue
             expected = known_fields.get(field)
             child_path = f"{path}.{field}"
             if expected is None:
+                if field in {"id", "modifierExtension"}:
+                    continue
                 issues.append(ValidationIssue(Severity.WARNING, "datatype.unknown-field", f"Unknown field {field} in {type_name}", resource_type, resource_id, child_path, source="datatype"))
                 continue
-            if not isinstance(item, expected):
-                expected_names = ", ".join(t.__name__ for t in expected)
-                issues.append(ValidationIssue(Severity.ERROR, "datatype.invalid", f"{child_path} must be {expected_names}", resource_type, resource_id, child_path, source="datatype"))
+            if isinstance(item, expected):
+                continue
+            if isinstance(item, list) and all(isinstance(i, expected) for i in item):
+                continue
+            expected_names = ", ".join(t.__name__ for t in expected)
+            issues.append(ValidationIssue(Severity.ERROR, "datatype.invalid", f"{child_path} must be {expected_names}", resource_type, resource_id, child_path, source="datatype"))
         if type_name == "CodeableConcept":
             for idx, coding in enumerate(value.get("coding", [])):
                 if not isinstance(coding, dict):
@@ -433,7 +570,7 @@ class Validator:
             extension_definition = None
         else:
             extension_definition = self.profile_registry.get_extension(extension_url)
-            if extension_definition is None:
+            if extension_definition is None and not self.config.allow_unknown_extensions:
                 issues.append(ValidationIssue(Severity.WARNING, "extension.unknown", f"Extension definition {extension_url} is not loaded", resource_type, resource_id, path, source="extension"))
         value_fields = [field for field in value if field.startswith("value")]
         if len(value_fields) > 1:
@@ -474,13 +611,19 @@ class Validator:
             issues.append(ValidationIssue(Severity.ERROR, "meta.profile.type", "meta.profile must be an array", resource_type, resource_id, f"{resource_type}.meta.profile", source="profile"))
             declared = []
         enforced = self.config.profiles.get(resource_type, [])
-        for profile in enforced:
-            if profile not in declared:
-                issues.append(ValidationIssue(Severity.ERROR, "profile.enforced.missing", f"Resource must declare enforced profile {profile}", resource_type, resource_id, f"{resource_type}.meta.profile", profile, source="profile"))
-        for profile_url in [*declared, *enforced]:
+        matched_enforced = [p for p in enforced if p in declared]
+        if enforced and not matched_enforced:
+            issues.append(ValidationIssue(Severity.ERROR, "profile.enforced.missing", f"Resource must declare at least one enforced profile for {resource_type}", resource_type, resource_id, f"{resource_type}.meta.profile", source="profile"))
+        active_enforced = matched_enforced if matched_enforced else enforced[:1]
+        for profile_url in dict.fromkeys([*declared, *active_enforced]):
             profile = self.profile_registry.get(profile_url)
             if profile is None:
-                severity = Severity.ERROR if profile_url in enforced else Severity.WARNING
+                if profile_url in enforced:
+                    severity = Severity.ERROR
+                elif not self.config.error_on_unknown_profile:
+                    continue
+                else:
+                    severity = Severity.WARNING
                 issues.append(ValidationIssue(severity, "profile.unknown", f"Profile {profile_url} is not loaded", resource_type, resource_id, f"{resource_type}.meta.profile", profile_url, source="profile"))
                 continue
             if profile.resource_type != resource_type:
@@ -488,9 +631,11 @@ class Validator:
             issues.extend(self._validate_profile_element_constraints(resource, profile_url, profile))
             issues.extend(self._validate_profile_slices(resource, profile_url, profile))
             for field in profile.required:
-                if field not in resource or resource[field] in (None, "", []):
+                if not _choice_field_present(resource, field):
                     issues.append(ValidationIssue(Severity.ERROR, "profile.required", f"Profile requires {resource_type}.{field}", resource_type, resource_id, f"{resource_type}.{field}", profile_url, source="profile"))
             for field, (min_value, max_value) in (profile.cardinality or {}).items():
+                if "[x]" in field and _choice_field_present(resource, field):
+                    continue
                 value = resource.get(field)
                 count = len(value) if isinstance(value, list) else 0 if value in (None, "", []) else 1
                 if count < min_value:
@@ -507,13 +652,17 @@ class Validator:
                         issues.append(ValidationIssue(Severity.ERROR, "profile.pattern", f"Profile pattern mismatch for {resource_type}.{field}", resource_type, resource_id, f"{resource_type}.{field}", profile_url, source="profile"))
             for field, (strength, value_set) in (profile.bindings or {}).items():
                 value = resource.get(field)
-                if isinstance(value, str):
-                    contains = self.terminology.contains(value_set.rsplit("/", 1)[-1], value)
+                vs_key = value_set.split("|")[0].rsplit("/", 1)[-1]
+                codes = [value] if isinstance(value, str) else _codeable_concept_codes(value)
+                for code in codes:
+                    contains = self.terminology.contains(vs_key, code)
                     if contains is False and strength == "required":
-                        issues.append(ValidationIssue(Severity.ERROR, "profile.binding.required", f"Code {value!r} is not in required profile ValueSet {value_set}", resource_type, resource_id, f"{resource_type}.{field}", profile_url, source="profile"))
+                        issues.append(ValidationIssue(Severity.ERROR, "profile.binding.required", f"Code {code!r} is not in required profile ValueSet {value_set}", resource_type, resource_id, f"{resource_type}.{field}", profile_url, source="profile"))
                     elif contains is False and strength == "extensible":
-                        issues.append(ValidationIssue(Severity.WARNING, "profile.binding.extensible", f"Code {value!r} is not in extensible profile ValueSet {value_set}", resource_type, resource_id, f"{resource_type}.{field}", profile_url, source="profile"))
+                        issues.append(ValidationIssue(Severity.WARNING, "profile.binding.extensible", f"Code {code!r} is not in extensible profile ValueSet {value_set}", resource_type, resource_id, f"{resource_type}.{field}", profile_url, source="profile"))
             for key, severity, expression in profile.invariants:
+                if key in _SKIP_INVARIANTS:
+                    continue
                 result = evaluate(resource, expression)
                 if result is False:
                     issue_severity = Severity.ERROR if severity == "error" else Severity.WARNING
@@ -526,9 +675,18 @@ class Validator:
         issues: list[ValidationIssue] = []
         resource_type = resource.get("resourceType")
         resource_id = resource.get("id")
+        sliced_paths_matched: dict[str, set[int]] = {}
         for key, slice_constraint in (profile.slices or {}).items():
-            parent_values = values_at_path(resource, slice_constraint.path)
-            matched = [value for value in parent_values if self._matches_slice(value, slice_constraint)]
+            if slice_constraint.path.endswith("[x]"):
+                parent_values = self._choice_type_values(resource, slice_constraint.path)
+            else:
+                parent_values = values_at_path(resource, slice_constraint.path)
+            matched_indices: list[int] = []
+            for idx, value in enumerate(parent_values):
+                if self._matches_slice(value, slice_constraint):
+                    matched_indices.append(idx)
+            matched = [parent_values[i] for i in matched_indices]
+            sliced_paths_matched.setdefault(slice_constraint.path, set()).update(matched_indices)
             issue_path = f"{resource_type}.{slice_constraint.path}:{slice_constraint.name}"
             count = len(matched)
             if count < slice_constraint.min:
@@ -543,11 +701,58 @@ class Validator:
                         issues.append(ValidationIssue(Severity.ERROR, "profile.slice.element.cardinality.min", f"Profile slice element {child_issue_path} requires at least {child_constraint.min} value(s)", resource_type, resource_id, child_issue_path, profile_url, source="profile"))
                     if child_constraint.max != "*" and len(child_values) > int(child_constraint.max):
                         issues.append(ValidationIssue(Severity.ERROR, "profile.slice.element.cardinality.max", f"Profile slice element {child_issue_path} allows at most {child_constraint.max} value(s)", resource_type, resource_id, child_issue_path, profile_url, source="profile"))
-                    if child_constraint.fixed is not None and any(child != child_constraint.fixed for child in child_values or [None]):
+                    if child_constraint.fixed is not None and child_values and any(child != child_constraint.fixed for child in child_values):
                         issues.append(ValidationIssue(Severity.ERROR, "profile.slice.element.fixed", f"Profile slice fixed value mismatch for {child_issue_path}", resource_type, resource_id, child_issue_path, profile_url, source="profile"))
-                    if child_constraint.pattern is not None and any(not _matches_pattern(child, child_constraint.pattern) for child in child_values or [None]):
+                    if child_constraint.pattern is not None and child_values and any(not _matches_pattern(child, child_constraint.pattern) for child in child_values):
                         issues.append(ValidationIssue(Severity.ERROR, "profile.slice.element.pattern", f"Profile slice pattern mismatch for {child_issue_path}", resource_type, resource_id, child_issue_path, profile_url, source="profile"))
+                    if child_constraint.binding is not None:
+                        strength, value_set = child_constraint.binding
+                        for child in child_values:
+                            if isinstance(child, str):
+                                contains = self.terminology.contains(value_set.rsplit("/", 1)[-1], child)
+                                if contains is False and strength == "required":
+                                    issues.append(ValidationIssue(Severity.ERROR, "profile.slice.element.binding.required", f"Code {child!r} is not in required ValueSet {value_set}", resource_type, resource_id, f"{issue_path}.{child_path}", profile_url, source="profile"))
+                                elif contains is False and strength == "extensible":
+                                    issues.append(ValidationIssue(Severity.WARNING, "profile.slice.element.binding.extensible", f"Code {child!r} is not in extensible ValueSet {value_set}", resource_type, resource_id, f"{issue_path}.{child_path}", profile_url, source="profile"))
+        slicing_rules = profile.slicing_rules or {}
+        for sliced_path, rules in slicing_rules.items():
+            if rules != "closed":
+                continue
+            if sliced_path.endswith("[x]"):
+                parent_values = self._choice_type_values(resource, sliced_path)
+            else:
+                parent_values = values_at_path(resource, sliced_path)
+            matched = sliced_paths_matched.get(sliced_path, set())
+            for idx, value in enumerate(parent_values):
+                if idx not in matched:
+                    issues.append(ValidationIssue(Severity.ERROR, "profile.slice.closed", f"Element at {resource_type}.{sliced_path}[{idx}] does not match any defined slice", resource_type, resource_id, f"{resource_type}.{sliced_path}[{idx}]", profile_url, source="profile"))
         return issues
+
+    def _choice_type_values(self, resource: dict[str, Any], choice_path: str) -> list[dict[str, Any]]:
+        prefix = choice_path.split(".")[-1].replace("[x]", "")
+        parts = choice_path.split(".")[:-1]
+        containers = [resource]
+        for part in parts:
+            next_containers: list[Any] = []
+            for container in containers:
+                if isinstance(container, dict):
+                    child = container.get(part)
+                    if isinstance(child, list):
+                        next_containers.extend(child)
+                    elif child is not None:
+                        next_containers.append(child)
+            containers = next_containers
+        results: list[dict[str, Any]] = []
+        for container in containers:
+            if not isinstance(container, dict):
+                continue
+            for field_name, field_value in container.items():
+                if field_name.startswith(prefix) and field_name != prefix and field_name[len(prefix):][0:1].isupper():
+                    suffix = field_name[len(prefix):]
+                    fhir_type = VALUE_FIELD_TYPES.get(field_name) or _CHOICE_SUFFIX_TO_FHIR_TYPE.get(suffix, suffix)
+                    wrapper = {"_choiceValue": field_value, "_choiceType": fhir_type}
+                    results.append(wrapper)
+        return results
 
     def _matches_slice(self, value: Any, slice_constraint: Any) -> bool:
         if not isinstance(value, dict):
@@ -562,10 +767,43 @@ class Validator:
         kind, path = discriminator
         if kind == "exists":
             return bool(values_at_path(value, path))
+        if kind == "type":
+            return self._matches_type_discriminator(value, path, slice_constraint)
+        if kind in ("pattern", "value") and path == "$this":
+            if slice_constraint.pattern is not None:
+                return _matches_pattern(value, slice_constraint.pattern)
+            if slice_constraint.fixed is not None:
+                return value == slice_constraint.fixed
         constraint = (slice_constraint.elements or {}).get(path)
-        if constraint is None:
-            return bool(values_at_path(value, path))
-        return self._matches_element_constraint(value, path, constraint)
+        if constraint is not None:
+            return self._matches_element_constraint(value, path, constraint)
+        for element_path, element_constraint in (slice_constraint.elements or {}).items():
+            if element_path.startswith(path + ".") or element_path == path:
+                if element_constraint.fixed is not None or element_constraint.pattern is not None:
+                    return self._matches_element_constraint(value, element_path, element_constraint)
+        return bool(values_at_path(value, path))
+
+    def _matches_type_discriminator(self, value: dict[str, Any], path: str, slice_constraint: Any) -> bool:
+        if not slice_constraint.type_code:
+            return False
+        if path == "$this":
+            if "_choiceType" in value:
+                return value["_choiceType"] == slice_constraint.type_code
+            for suffix, fhir_type in VALUE_FIELD_TYPES.items():
+                if suffix in value:
+                    return fhir_type == slice_constraint.type_code
+            return False
+        target_values = values_at_path(value, path)
+        if not target_values:
+            return False
+        for target in target_values:
+            if isinstance(target, dict):
+                if "_choiceType" in target:
+                    return target["_choiceType"] == slice_constraint.type_code
+                for suffix, fhir_type in VALUE_FIELD_TYPES.items():
+                    if suffix in target:
+                        return fhir_type == slice_constraint.type_code
+        return False
 
     def _matches_element_constraint(self, value: dict[str, Any], path: str, constraint: Any) -> bool:
         values = values_at_path(value, path)
@@ -580,39 +818,103 @@ class Validator:
         resource_type = resource.get("resourceType")
         resource_id = resource.get("id")
         for path, constraint in (profile.elements or {}).items():
-            values = values_at_path(resource, path)
-            count = len(values)
             issue_path = f"{resource_type}.{path}"
+            if "." in path:
+                issues.extend(self._validate_nested_element_constraint(resource, resource_type, resource_id, path, constraint, issue_path, profile_url))
+            else:
+                issues.extend(self._validate_flat_element_constraint(resource, resource_type, resource_id, path, constraint, issue_path, profile_url))
+        return issues
+
+    def _validate_flat_element_constraint(self, resource: dict[str, Any], resource_type: str | None, resource_id: str | None, path: str, constraint: Any, issue_path: str, profile_url: str) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
+        values = values_at_path(resource, path)
+        count = len(values)
+        if count < constraint.min:
+            issues.append(ValidationIssue(Severity.ERROR, "profile.element.cardinality.min", f"Profile requires at least {constraint.min} value(s) for {issue_path}", resource_type, resource_id, issue_path, profile_url, source="profile"))
+        if constraint.max != "*" and count > int(constraint.max):
+            issues.append(ValidationIssue(Severity.ERROR, "profile.element.cardinality.max", f"Profile allows at most {constraint.max} value(s) for {issue_path}", resource_type, resource_id, issue_path, profile_url, source="profile"))
+        if constraint.fixed is not None:
+            for value in values or [None]:
+                if value != constraint.fixed:
+                    issues.append(ValidationIssue(Severity.ERROR, "profile.element.fixed", f"Profile fixed value mismatch for {issue_path}", resource_type, resource_id, issue_path, profile_url, source="profile"))
+                    break
+        if constraint.pattern is not None:
+            for value in values or [None]:
+                if not _matches_pattern(value, constraint.pattern):
+                    issues.append(ValidationIssue(Severity.ERROR, "profile.element.pattern", f"Profile pattern mismatch for {issue_path}", resource_type, resource_id, issue_path, profile_url, source="profile"))
+                    break
+        issues.extend(self._check_element_binding(values, constraint, resource_type, resource_id, issue_path, profile_url))
+        issues.extend(self._check_element_invariants(values, constraint, resource_type, resource_id, issue_path, profile_url))
+        return issues
+
+    def _validate_nested_element_constraint(self, resource: dict[str, Any], resource_type: str | None, resource_id: str | None, path: str, constraint: Any, issue_path: str, profile_url: str) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
+        parts = path.split(".")
+        parent_path = parts[0]
+        child_path = ".".join(parts[1:])
+        parents = values_at_path(resource, parent_path)
+        if not parents:
+            return issues
+        all_child_values: list[Any] = []
+        child_parts = child_path.split(".")
+        for parent in parents:
+            if not isinstance(parent, dict):
+                continue
+            if len(child_parts) > 1:
+                intermediate_path = ".".join(child_parts[:-1])
+                intermediate_parents = values_at_path(parent, intermediate_path)
+                if not intermediate_parents:
+                    continue
+            child_values = values_at_path(parent, child_path)
+            all_child_values.extend(child_values)
+            count = len(child_values)
             if count < constraint.min:
                 issues.append(ValidationIssue(Severity.ERROR, "profile.element.cardinality.min", f"Profile requires at least {constraint.min} value(s) for {issue_path}", resource_type, resource_id, issue_path, profile_url, source="profile"))
             if constraint.max != "*" and count > int(constraint.max):
                 issues.append(ValidationIssue(Severity.ERROR, "profile.element.cardinality.max", f"Profile allows at most {constraint.max} value(s) for {issue_path}", resource_type, resource_id, issue_path, profile_url, source="profile"))
-            if constraint.fixed is not None:
-                for value in values or [None]:
-                    if value != constraint.fixed:
-                        issues.append(ValidationIssue(Severity.ERROR, "profile.element.fixed", f"Profile fixed value mismatch for {issue_path}", resource_type, resource_id, issue_path, profile_url, source="profile"))
-                        break
-            if constraint.pattern is not None:
-                for value in values or [None]:
-                    if not _matches_pattern(value, constraint.pattern):
-                        issues.append(ValidationIssue(Severity.ERROR, "profile.element.pattern", f"Profile pattern mismatch for {issue_path}", resource_type, resource_id, issue_path, profile_url, source="profile"))
-                        break
-            if constraint.binding is not None:
-                strength, value_set = constraint.binding
-                for value in values:
-                    if isinstance(value, str):
-                        contains = self.terminology.contains(value_set.rsplit("/", 1)[-1], value)
-                        if contains is False and strength == "required":
-                            issues.append(ValidationIssue(Severity.ERROR, "profile.element.binding.required", f"Code {value!r} is not in required profile ValueSet {value_set}", resource_type, resource_id, issue_path, profile_url, source="profile"))
-                        elif contains is False and strength == "extensible":
-                            issues.append(ValidationIssue(Severity.WARNING, "profile.element.binding.extensible", f"Code {value!r} is not in extensible profile ValueSet {value_set}", resource_type, resource_id, issue_path, profile_url, source="profile"))
-            for key, severity, expression in constraint.invariants:
-                result = evaluate(resource, expression)
+            if child_values:
+                if constraint.fixed is not None and not any(v == constraint.fixed for v in child_values):
+                    issues.append(ValidationIssue(Severity.ERROR, "profile.element.fixed", f"Profile fixed value mismatch for {issue_path}", resource_type, resource_id, issue_path, profile_url, source="profile"))
+                if constraint.pattern is not None and not any(_matches_pattern(v, constraint.pattern) for v in child_values):
+                    issues.append(ValidationIssue(Severity.ERROR, "profile.element.pattern", f"Profile pattern mismatch for {issue_path}", resource_type, resource_id, issue_path, profile_url, source="profile"))
+            issues.extend(self._check_element_binding(child_values, constraint, resource_type, resource_id, issue_path, profile_url))
+        if parents:
+            issues.extend(self._check_element_invariants(all_child_values, constraint, resource_type, resource_id, issue_path, profile_url))
+        return issues
+
+    def _check_element_binding(self, values: list[Any], constraint: Any, resource_type: str | None, resource_id: str | None, issue_path: str, profile_url: str) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
+        if constraint.binding is None:
+            return issues
+        strength, value_set = constraint.binding
+        vs_key = value_set.split("|")[0].rsplit("/", 1)[-1]
+        for value in values:
+            codes = [value] if isinstance(value, str) else _codeable_concept_codes(value)
+            for code in codes:
+                contains = self.terminology.contains(vs_key, code)
+                if contains is False and strength == "required":
+                    issues.append(ValidationIssue(Severity.ERROR, "profile.element.binding.required", f"Code {code!r} is not in required profile ValueSet {value_set}", resource_type, resource_id, issue_path, profile_url, source="profile"))
+                elif contains is False and strength == "extensible":
+                    issues.append(ValidationIssue(Severity.WARNING, "profile.element.binding.extensible", f"Code {code!r} is not in extensible profile ValueSet {value_set}", resource_type, resource_id, issue_path, profile_url, source="profile"))
+        return issues
+
+    def _check_element_invariants(self, element_values: list[Any], constraint: Any, resource_type: str | None, resource_id: str | None, issue_path: str, profile_url: str) -> list[ValidationIssue]:
+        issues: list[ValidationIssue] = []
+        for key, severity, expression in constraint.invariants:
+            if key in _SKIP_INVARIANTS:
+                continue
+            contexts = [v for v in element_values if isinstance(v, dict)] or element_values
+            if not contexts:
+                continue
+            for context in contexts:
+                result = evaluate(context, expression) if isinstance(context, dict) else None
                 if result is False:
                     issue_severity = Severity.ERROR if severity == "error" else Severity.WARNING
                     issues.append(ValidationIssue(issue_severity, f"profile.element.invariant.{key}", f"FHIRPath invariant failed: {expression}", resource_type, resource_id, issue_path, profile_url, source="fhirpath"))
-                elif result is None:
+                    break
+                if result is None:
                     issues.append(ValidationIssue(Severity.WARNING, f"profile.element.invariant.unsupported.{key}", f"FHIRPath invariant is not supported by the lightweight evaluator: {expression}", resource_type, resource_id, issue_path, profile_url, source="fhirpath"))
+                    break
         return issues
 
     def _validate_contained(self, resource: dict[str, Any]) -> list[ValidationIssue]:
@@ -629,11 +931,28 @@ class Validator:
                 issues.append(ValidationIssue(Severity.ERROR, "contained.resource", "contained entries must be resources", resource.get("resourceType"), resource.get("id"), f"{resource.get('resourceType')}.contained[{idx}]", source="structure"))
         return issues
 
-    def _report(self, issues: list[ValidationIssue], resources: list[dict[str, Any]], input_source: str, input_payloads: list[Any]) -> ValidationReport:
+    def _report(
+        self,
+        issues: list[ValidationIssue],
+        resources: list[dict[str, Any]],
+        input_source: str,
+        input_payloads: list[Any],
+        input_hashes: dict[str, str],
+    ) -> ValidationReport:
         issues = [self._apply_severity_policy(issue) for issue in issues]
+        issues = sorted(issues, key=lambda issue: issue.fingerprint())
         errors = any(issue.severity is Severity.ERROR for issue in issues)
         warnings = any(issue.severity is Severity.WARNING for issue in issues)
         status = Status.FAIL if errors else Status.WARN if warnings else Status.PASS
+        definition_source = {
+            "mode": "package" if self.loaded_structure_definitions else "builtin",
+            "loadedStructureDefinitions": self.loaded_structure_definitions,
+            "mergedSnapshots": self.merged_snapshots,
+            "resourceDefinitions": len(self.resource_definitions),
+            "complexTypeDefinitions": len(self.complex_type_fields),
+            "fhirPathBackend": backend_name(),
+            "packages": [package.to_dict() for package in self.resolved_packages],
+        }
         return ValidationReport(
             run_id=str(uuid4()),
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -645,18 +964,61 @@ class Validator:
             configured_igs=self.config.enabled_igs,
             terminology=self.terminology.evidence(),
             deterministic_hash=stable_hash(input_payloads, self.config.to_dict()),
-            definition_source={
-                "mode": "package" if self.loaded_structure_definitions else "builtin",
-                "loadedStructureDefinitions": self.loaded_structure_definitions,
-                "mergedSnapshots": self.merged_snapshots,
-                "resourceDefinitions": len(self.resource_definitions),
-                "complexTypeDefinitions": len(self.complex_type_fields),
-                "fhirPathBackend": backend_name(),
-                "packages": [package.to_dict() for package in self.resolved_packages],
+            definition_source=definition_source,
+            config_snapshot=self.config.to_dict(),
+            input_hashes=input_hashes,
+            replay={
+                "inputSource": input_source,
+                "inputFiles": sorted(input_hashes),
+                "validatorCommand": None,
             },
-            issues=sorted(issues, key=lambda issue: issue.fingerprint()),
+            issues=issues,
+            resources=self._resource_summaries(resources, issues),
             status=status,
         )
+
+    def _resource_summaries(self, resources: list[dict[str, Any]], issues: list[ValidationIssue]) -> list[ResourceValidationSummary]:
+        return [
+            self._resource_summary(index, resource, self._issues_for_resource(resource, issues))
+            for index, resource in enumerate(resources)
+        ]
+
+    def _resource_summary(self, index: int, resource: dict[str, Any], issues: list[ValidationIssue]) -> ResourceValidationSummary:
+        error_count = sum(1 for issue in issues if issue.severity is Severity.ERROR)
+        warning_count = sum(1 for issue in issues if issue.severity is Severity.WARNING)
+        information_count = sum(1 for issue in issues if issue.severity is Severity.INFORMATION)
+        status = Status.FAIL if error_count else Status.WARN if warning_count else Status.PASS
+        return ResourceValidationSummary(
+            index=index,
+            resource_type=resource.get("resourceType") if isinstance(resource.get("resourceType"), str) else None,
+            resource_id=resource.get("id") if isinstance(resource.get("id"), str) else None,
+            profiles=tuple(self._profiles_for_resource(resource)),
+            status=status,
+            issue_count=len(issues),
+            error_count=error_count,
+            warning_count=warning_count,
+            information_count=information_count,
+            issues=tuple(issues),
+        )
+
+    def _issues_for_resource(self, resource: dict[str, Any], issues: list[ValidationIssue]) -> list[ValidationIssue]:
+        resource_type = resource.get("resourceType")
+        resource_id = resource.get("id")
+        return [
+            issue
+            for issue in issues
+            if issue.resource_type == resource_type and (resource_id is None or issue.resource_id in {None, resource_id})
+        ]
+
+    def _profiles_for_resource(self, resource: dict[str, Any]) -> list[str]:
+        profiles: list[str] = []
+        meta = resource.get("meta")
+        if isinstance(meta, dict) and isinstance(meta.get("profile"), list):
+            profiles.extend(profile for profile in meta["profile"] if isinstance(profile, str))
+        resource_type = resource.get("resourceType")
+        if isinstance(resource_type, str):
+            profiles.extend(self.config.profiles.get(resource_type, []))
+        return list(dict.fromkeys(profiles))
 
     def _apply_severity_policy(self, issue: ValidationIssue) -> ValidationIssue:
         configured = self.config.severity_policy.get(issue.code)

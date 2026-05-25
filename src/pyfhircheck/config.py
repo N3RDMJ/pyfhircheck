@@ -10,9 +10,16 @@ from typing import Any
 class TerminologyConfig:
     mode: str = "local"
     code_systems: dict[str, list[str]] = field(default_factory=dict)
+    ignored_code_systems: list[str] = field(default_factory=list)
+    ignored_value_sets: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"mode": self.mode, "codeSystems": self.code_systems}
+        return {
+            "mode": self.mode,
+            "codeSystems": self.code_systems,
+            "ignoredCodeSystems": self.ignored_code_systems,
+            "ignoredValueSets": self.ignored_value_sets,
+        }
 
 
 @dataclass
@@ -39,6 +46,8 @@ class ValidatorConfig:
     remote_package_sources: list[str] = field(default_factory=list)
     terminology: TerminologyConfig = field(default_factory=TerminologyConfig)
     profiles: dict[str, list[str]] = field(default_factory=dict)
+    error_on_unknown_profile: bool = True
+    allow_unknown_extensions: bool = False
     severity_policy: dict[str, str] = field(default_factory=dict)
     ci_failure_threshold: str = "error"
     custom_rules: dict[str, Any] = field(default_factory=dict)
@@ -70,8 +79,12 @@ class ValidatorConfig:
             terminology=TerminologyConfig(
                 mode=terminology.get("mode", "local"),
                 code_systems=dict(terminology.get("codeSystems", terminology.get("code_systems", {}))),
+                ignored_code_systems=list(terminology.get("ignoredCodeSystems", terminology.get("ignored_code_systems", []))),
+                ignored_value_sets=list(terminology.get("ignoredValueSets", terminology.get("ignored_value_sets", []))),
             ),
             profiles=dict(data.get("profiles", {})),
+            error_on_unknown_profile=bool(data.get("errorOnUnknownProfile", data.get("error_on_unknown_profile", True))),
+            allow_unknown_extensions=bool(data.get("allowUnknownExtensions", data.get("allow_unknown_extensions", False))),
             severity_policy=dict(data.get("severityPolicy", data.get("severity_policy", {}))),
             ci_failure_threshold=data.get("ciFailureThreshold", data.get("ci_failure_threshold", "error")),
             custom_rules=dict(data.get("customRules", data.get("custom_rules", {}))),
@@ -107,6 +120,8 @@ class ValidatorConfig:
             "remotePackageSources": self.remote_package_sources,
             "terminology": self.terminology.to_dict(),
             "profiles": self.profiles,
+            "errorOnUnknownProfile": self.error_on_unknown_profile,
+            "allowUnknownExtensions": self.allow_unknown_extensions,
             "severityPolicy": self.severity_policy,
             "ciFailureThreshold": self.ci_failure_threshold,
             "customRules": self.custom_rules,

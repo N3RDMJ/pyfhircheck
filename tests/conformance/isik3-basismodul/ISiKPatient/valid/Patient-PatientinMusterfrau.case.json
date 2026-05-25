@@ -1,0 +1,6 @@
+{
+  "description": "ISiK Basismodul fixture ISiKPatient/valid/Patient-PatientinMusterfrau.json",
+  "expectedStatus": "PASS",
+  "fixturePath": "../../../../fixtures/isik3-basismodul/ISiKPatient/valid/Patient-PatientinMusterfrau.json",
+  "source": "gematik/app-referencevalidator-plugins valmodule-isik3-basismodul/src/main/resources/plugin/test-files/ISiK-Basismodul"
+}

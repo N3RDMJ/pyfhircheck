@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 evidence/
+!src/pyfhircheck/evidence/
+!src/pyfhircheck/evidence/*.py
 tmp-*-report.json
 tmp-oo.json
 tmp-ci.txt

@@ -10,7 +10,7 @@ from typing import Any
 FHIR_REF_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]+/[A-Za-z0-9\-.]{1,64}(/_history/[A-Za-z0-9\-.]{1,64})?$")
 ID_RE = re.compile(r"^[A-Za-z0-9\-.]{1,64}$")
 DATE_RE = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")
-DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T")
+DATETIME_RE = re.compile(r"^\d{4}(-\d{2}(-\d{2}(T[0-9:.+\-Z]+)?)?)?$")
 INSTANT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T.+(Z|[+-]\d{2}:\d{2})$")
 
 
@@ -22,6 +22,14 @@ def stable_hash(*parts: Any) -> str:
     digest = hashlib.sha256()
     for part in parts:
         digest.update(canonical_json(part).encode("utf-8"))
+    return digest.hexdigest()
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
     return digest.hexdigest()
 
 
@@ -74,22 +82,44 @@ def values_at_path(data: Any, path: str) -> list[Any]:
     current_values = [data]
     for part in path.split("."):
         next_values: list[Any] = []
-        for value in current_values:
-            if isinstance(value, list):
-                for item in value:
-                    if isinstance(item, dict) and part in item:
-                        child = item[part]
-                        if isinstance(child, list):
-                            next_values.extend(child)
-                        else:
-                            next_values.append(child)
-            elif isinstance(value, dict) and part in value:
-                child = value[part]
-                if isinstance(child, list):
-                    next_values.extend(child)
-                else:
-                    next_values.append(child)
+        if part.endswith("[x]"):
+            prefix = part[:-3]
+            for value in current_values:
+                _collect_choice_values(value, prefix, next_values)
+        else:
+            for value in current_values:
+                _collect_field_values(value, part, next_values)
         current_values = next_values
         if not current_values:
             return []
     return current_values
+
+
+def _collect_field_values(value: Any, part: str, out: list[Any]) -> None:
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict) and part in item:
+                child = item[part]
+                if isinstance(child, list):
+                    out.extend(child)
+                else:
+                    out.append(child)
+    elif isinstance(value, dict) and part in value:
+        child = value[part]
+        if isinstance(child, list):
+            out.extend(child)
+        else:
+            out.append(child)
+
+
+def _collect_choice_values(value: Any, prefix: str, out: list[Any]) -> None:
+    targets = [value] if isinstance(value, dict) else value if isinstance(value, list) else []
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        for key, child in target.items():
+            if key.startswith(prefix) and key != prefix and key[len(prefix):][0:1].isupper():
+                if isinstance(child, list):
+                    out.extend(child)
+                else:
+                    out.append(child)

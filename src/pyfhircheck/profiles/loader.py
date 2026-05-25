@@ -26,6 +26,9 @@ class SliceConstraint:
     max: str = "*"
     discriminators: tuple[tuple[str, str], ...] = ()
     elements: dict[str, ElementConstraint] | None = None
+    type_code: str | None = None
+    pattern: Any | None = None
+    fixed: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,7 @@ class ProfileConstraint:
     invariants: tuple[tuple[str, str, str], ...] = ()
     elements: dict[str, ElementConstraint] | None = None
     slices: dict[str, SliceConstraint] | None = None
+    slicing_rules: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -99,7 +103,9 @@ class ProfileRegistry:
         element_constraints: dict[str, ElementConstraint] = {}
         slice_constraints: dict[str, dict[str, Any]] = {}
         slicing_discriminators: dict[str, tuple[tuple[str, str], ...]] = {}
+        slicing_rules: dict[str, str] = {}
         elements = elements if elements is not None else data.get("snapshot", {}).get("element", []) or data.get("differential", {}).get("element", [])
+        current_slice_context: dict[str, str] = {}
         for element in elements:
             path = element.get("path")
             if not isinstance(path, str):
@@ -113,13 +119,27 @@ class ProfileRegistry:
                 continue
             field = path.split(".", 1)[1]
             normalized_field, slice_name, slice_child = _parse_slice_path(field, element)
+            if slice_name is not None and slice_child is None:
+                current_slice_context[normalized_field] = slice_name
+            elif slice_name is None and "." not in normalized_field:
+                current_slice_context.pop(normalized_field, None)
+            elif slice_name is None and "." in normalized_field:
+                parent_field = normalized_field.split(".")[0]
+                if parent_field in current_slice_context:
+                    slice_name = current_slice_context[parent_field]
+                    slice_child = ".".join(normalized_field.split(".")[1:])
+                    normalized_field = parent_field
             slicing = element.get("slicing")
             if isinstance(slicing, dict):
                 discriminators = _parse_discriminators(slicing)
                 if discriminators:
                     slicing_discriminators[normalized_field] = discriminators
-            min_value = int(element.get("min", 0))
-            max_value = str(element.get("max", "1"))
+                rules = slicing.get("rules")
+                if isinstance(rules, str):
+                    slicing_rules[normalized_field] = rules
+            min_value = _safe_int(element.get("min", 0))
+            raw_max = element.get("max")
+            max_value = str(raw_max) if raw_max is not None else "*"
             binding = element.get("binding")
             if isinstance(binding, dict) and isinstance(binding.get("valueSet"), str):
                 binding_pair = (binding.get("strength", "example"), binding["valueSet"])
@@ -156,11 +176,23 @@ class ProfileRegistry:
                         "min": 0,
                         "max": "*",
                         "elements": {},
+                        "type_code": None,
+                        "pattern": None,
+                        "fixed": None,
                     },
                 )
                 if slice_child is None:
                     slice_data["min"] = min_value
                     slice_data["max"] = max_value
+                    if pattern_value is not None:
+                        slice_data["pattern"] = pattern_value
+                    if fixed_value is not None:
+                        slice_data["fixed"] = fixed_value
+                    type_entries = element.get("type", [])
+                    if isinstance(type_entries, list) and len(type_entries) == 1:
+                        tc = type_entries[0]
+                        if isinstance(tc, dict) and isinstance(tc.get("code"), str):
+                            slice_data["type_code"] = tc["code"]
                 else:
                     slice_data["elements"][slice_child] = element_constraint
                 continue
@@ -172,7 +204,6 @@ class ProfileRegistry:
                 required.append(normalized_field)
             if binding_pair is not None:
                 bindings[normalized_field] = binding_pair
-            invariants.extend(element_invariants)
             if fixed_value is not None:
                 fixed[normalized_field] = fixed_value
             if pattern_value is not None:
@@ -185,6 +216,9 @@ class ProfileRegistry:
                 max=value["max"],
                 discriminators=slicing_discriminators.get(value["path"], ()),
                 elements=value["elements"],
+                type_code=value.get("type_code"),
+                pattern=value.get("pattern"),
+                fixed=value.get("fixed"),
             )
             for key, value in slice_constraints.items()
         }
@@ -200,6 +234,7 @@ class ProfileRegistry:
                 invariants=tuple(invariants),
                 elements=element_constraints,
                 slices=slices,
+                slicing_rules=slicing_rules or None,
             )
         )
 
@@ -229,7 +264,7 @@ class ProfileRegistry:
                 if fixed and fixed != url:
                     continue
             if path == "Extension.value[x]":
-                min_value = int(element.get("min", 0))
+                min_value = _safe_int(element.get("min", 0))
                 max_value = str(element.get("max", "1"))
                 value_types.extend(
                     str(type_entry.get("code"))
@@ -241,7 +276,7 @@ class ProfileRegistry:
                 if slice_name and slice_child == "url":
                     fixed = next((value for key, value in element.items() if key.startswith("fixed")), None)
                     if fixed:
-                        nested[slice_name] = ElementConstraint(path=field, min=int(element.get("min", 0)), max=str(element.get("max", "1")), fixed=fixed)
+                        nested[slice_name] = ElementConstraint(path=field, min=_safe_int(element.get("min", 0)), max=str(element.get("max", "1")), fixed=fixed)
         self._extensions[url] = ExtensionConstraint(
             url=url,
             is_modifier=is_modifier,
@@ -270,6 +305,13 @@ def _parse_slice_path(field: str, element: dict[str, Any]) -> tuple[str, str | N
         normalized = [parts[0]]
         child_parts = parts[1:]
     return ".".join(normalized), found_slice, ".".join(child_parts) if child_parts else None
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _parse_discriminators(slicing: dict[str, Any]) -> tuple[tuple[str, str], ...]:

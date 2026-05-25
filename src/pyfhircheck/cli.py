@@ -8,11 +8,13 @@ from pathlib import Path
 from pyfhircheck.config import ValidatorConfig
 from pyfhircheck.conformance import run_conformance_cases
 from pyfhircheck.core.engine import Validator
+from pyfhircheck.core.util import file_sha256, iter_json_files
 from pyfhircheck.evidence.drift import compare_reports
 from pyfhircheck.evidence.store import EvidenceStore
 from pyfhircheck.models import Status
 from pyfhircheck.profiles.package import PackageResolver
-from pyfhircheck.reporting.output import ci_summary, console_summary, json_report, operation_outcome
+from pyfhircheck.reporting.output import agent_report, ci_summary, console_summary, json_report, operation_outcome
+from pyfhircheck.rules.catalog import explain_rule, rule_catalog
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,6 +28,17 @@ def main(argv: list[str] | None = None) -> int:
             return _compare(args)
         if args.command == "export-evidence":
             return _export(args)
+        if args.command == "rules":
+            print(json.dumps(rule_catalog(), indent=2, sort_keys=True))
+            return 0
+        if args.command == "explain":
+            explanation = explain_rule(args.code)
+            if args.json:
+                print(json.dumps(explanation, indent=2, sort_keys=True))
+            else:
+                print(f"{explanation['code']}: {explanation['hint']}")
+                print(f"category={explanation['category']} repairability={explanation['repairability']} skill={explanation['skill']}")
+            return 0
         config = ValidatorConfig.load(getattr(args, "config", None))
         config_errors = config.validate()
         if args.command == "validate-config":
@@ -53,16 +66,26 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         validator = Validator(config)
         if args.command in {"file", "bundle", "folder"}:
-            report = validator.validate_path(Path(args.path))
+            path = Path(args.path)
+            changed_files = _changed_files(path, args.changed_from) if args.changed_from else None
+            if changed_files is not None:
+                report = validator.validate_files(changed_files, f"{path} changed since {args.changed_from}", reference_file_paths=iter_json_files(path))
+            else:
+                report = validator.validate_path(path)
         elif args.command == "server":
             report = validator.validate_server(args.url)
         else:
             parser.print_help()
             return 2
-        evidence_path = EvidenceStore(config.evidence_output_dir).write(report)
+        report.replay["validatorCommand"] = _replay_command(args)
+        evidence_path = EvidenceStore(config.evidence_output_dir).write(report, argv=_replay_command(args))
         _write_requested_outputs(args, report)
-        print(console_summary(report))
-        print(f"Evidence: {evidence_path}")
+        max_issues = 1 if getattr(args, "fail_fast", False) else getattr(args, "max_issues", None)
+        if getattr(args, "agent_output", False):
+            print(agent_report(report, str(evidence_path), max_issues=max_issues))
+        else:
+            print(console_summary(report, max_issues=max_issues))
+            print(f"Evidence: {evidence_path}")
         return _exit_for(report, config)
     except Exception as exc:  # noqa: BLE001 - CLI maps unexpected runtime errors to exit code 2.
         print(f"Validator error: {exc}")
@@ -93,6 +116,11 @@ def _parser() -> argparse.ArgumentParser:
     export = sub.add_parser("export-evidence", help="copy an evidence run to another directory")
     export.add_argument("run")
     export.add_argument("destination")
+    rules = sub.add_parser("rules", help="print the machine-readable validation rule catalog")
+    rules.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    explain = sub.add_parser("explain", help="explain a validation rule code")
+    explain.add_argument("code")
+    explain.add_argument("--json", action="store_true")
     return parser
 
 
@@ -101,6 +129,10 @@ def _common(cmd: argparse.ArgumentParser) -> None:
     cmd.add_argument("--json-output")
     cmd.add_argument("--operation-outcome-output")
     cmd.add_argument("--ci-summary-output")
+    cmd.add_argument("--agent-output", action="store_true", help="write a single machine-readable JSON object to stdout")
+    cmd.add_argument("--max-issues", type=int, help="limit issues shown in console or agent output")
+    cmd.add_argument("--fail-fast", action="store_true", help="show only the first issue in loop-oriented output")
+    cmd.add_argument("--changed-from", help="validate only JSON files changed since a previous evidence run")
 
 
 def _write_requested_outputs(args: argparse.Namespace, report) -> None:
@@ -140,3 +172,34 @@ def _export(args: argparse.Namespace) -> int:
     shutil.copytree(source, target)
     print(target)
     return 0
+
+
+def _changed_files(path: Path, evidence_run: str) -> list[Path]:
+    previous = EvidenceStore.load_report(evidence_run)
+    previous_inputs = previous.get("inputs", {})
+    if not isinstance(previous_inputs, dict) or not previous_inputs:
+        return iter_json_files(path)
+    changed = []
+    for file_path in iter_json_files(path):
+        old_hash = previous_inputs.get(str(file_path))
+        try:
+            current_hash = file_sha256(file_path)
+        except OSError:
+            changed.append(file_path)
+            continue
+        if current_hash != old_hash:
+            changed.append(file_path)
+    return changed
+
+
+def _replay_command(args: argparse.Namespace) -> list[str]:
+    command = [str(args.command)]
+    for attr in ("path", "url"):
+        value = getattr(args, attr, None)
+        if value:
+            command.append(str(value))
+    if getattr(args, "config", None):
+        command.extend(["--config", str(args.config)])
+    if getattr(args, "changed_from", None):
+        command.extend(["--changed-from", str(args.changed_from)])
+    return command

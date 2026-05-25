@@ -41,11 +41,11 @@ def run_conformance_cases(path: Path, config: ValidatorConfig | None = None) -> 
     results: list[ConformanceCaseResult] = []
     for case_path in sorted(path.rglob("*.json")) if path.is_dir() else [path]:
         data = json.loads(case_path.read_text(encoding="utf-8"))
-        resource = data.get("resource") if isinstance(data, dict) and "resource" in data else data
+        resource, source_path = _case_resource(data, case_path)
         expected = data.get("expectedStatus", data.get("expected", "PASS")) if isinstance(data, dict) else "PASS"
         if expected == "ERROR":
             expected = "FAIL"
-        report = validator.validate_resource(resource, str(case_path))
+        report = validator.validate_resource(resource, str(source_path))
         actual = _normalize(report.status)
         expected = str(expected).upper()
         expected_issues = _expected_issues(data if isinstance(data, dict) else {})
@@ -75,11 +75,21 @@ def run_conformance_cases(path: Path, config: ValidatorConfig | None = None) -> 
     }
 
 
+def _case_resource(data: Any, case_path: Path) -> tuple[dict[str, Any], Path]:
+    if not isinstance(data, dict):
+        return data, case_path
+    if "resource" in data:
+        return data["resource"], case_path
+    fixture_path = data.get("fixturePath")
+    if isinstance(fixture_path, str):
+        source_path = (case_path.parent / fixture_path).resolve()
+        return json.loads(source_path.read_text(encoding="utf-8")), source_path
+    return data, case_path
+
+
 def _normalize(status: Status) -> str:
     if status is Status.FAIL:
         return "FAIL"
-    if status is Status.WARN:
-        return "WARN"
     return "PASS"
 
 

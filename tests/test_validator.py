@@ -9,6 +9,9 @@ from pyfhircheck.core.engine import Validator
 from pyfhircheck.evidence.drift import compare_reports
 from pyfhircheck.evidence.store import EvidenceStore
 from pyfhircheck.models import Status
+from pyfhircheck.profiles.package import PackageResolver
+from pyfhircheck.reporting.output import operation_outcome
+from pyfhircheck.terminology.resolver import TerminologyResolver
 
 
 def valid_patient() -> dict:
@@ -148,7 +151,11 @@ def test_profile_enforcement_through_config() -> None:
     report = Validator(config).validate_resource({"resourceType": "Patient", "id": "pat-1"})
     assert report.status is Status.FAIL
     assert "profile.enforced.missing" in {issue.code for issue in report.issues}
-    assert "profile.required" in {issue.code for issue in report.issues}
+
+    report_declared = Validator(config).validate_resource(
+        {"resourceType": "Patient", "id": "pat-1", "meta": {"profile": ["http://example.org/fhir/StructureDefinition/patient-with-identifier"]}}
+    )
+    assert "profile.required" in {issue.code for issue in report_declared.issues}
 
 
 def test_terminology_failure_behavior() -> None:
@@ -170,11 +177,65 @@ def test_json_report_format_and_evidence(tmp_path: Path) -> None:
     assert data["runId"]
     assert data["deterministicHash"]
     assert data["status"] == "PASS"
+    assert data["summary"]["totalResources"] == 1
+    assert data["summary"]["resourcesByType"] == {"Patient": 1}
+    assert data["summary"]["resourcesByProfile"] == {"http://example.org/fhir/StructureDefinition/patient-with-identifier": 1}
+    assert data["summary"]["statusByResourceType"] == {"Patient": {"PASS": 1, "WARN": 0, "FAIL": 0}}
+    assert data["resources"][0]["reference"] == "Patient/pat-1"
+    assert data["resources"][0]["profiles"] == ["http://example.org/fhir/StructureDefinition/patient-with-identifier"]
+    assert data["resources"][0]["status"] == "PASS"
     run_dir = EvidenceStore(tmp_path).write(report)
     assert (run_dir / "report.json").exists()
     assert (run_dir / "operation-outcome.json").exists()
+    assert (run_dir / "manifest.json").exists()
+    assert (run_dir / "config.json").exists()
+    assert (run_dir / "inputs.json").exists()
     loaded = EvidenceStore.load_report(run_dir)
     assert loaded["runId"] == report.run_id
+
+
+def test_report_groups_issues_by_resource_and_type() -> None:
+    bundle = {
+        "resourceType": "Bundle",
+        "type": "collection",
+        "entry": [
+            {"resource": valid_patient()},
+            {"resource": {"resourceType": "Patient", "id": "bad id", "gender": "bad"}},
+            {"resource": {"resourceType": "Observation", "id": "obs-1", "status": "bad"}},
+        ],
+    }
+
+    data = Validator().validate_resource(bundle).to_dict()
+
+    assert data["summary"]["totalResources"] == 4
+    assert data["summary"]["resourcesByType"] == {"Bundle": 1, "Observation": 1, "Patient": 2}
+    assert data["summary"]["statusByResourceType"]["Bundle"]["PASS"] == 1
+    assert data["summary"]["statusByResourceType"]["Observation"]["FAIL"] == 1
+    assert data["summary"]["statusByResourceType"]["Patient"]["FAIL"] == 1
+    bad_patient = next(resource for resource in data["resources"] if resource["resourceId"] == "bad id")
+    assert bad_patient["status"] == "FAIL"
+    assert bad_patient["issueCount"] >= 1
+
+
+def test_operation_outcome_includes_location_profile_and_precise_issue_type() -> None:
+    config = ValidatorConfig(profiles={"Patient": ["http://example.test/StructureDefinition/patient"]})
+    report = Validator(config).validate_resource({"resourceType": "Patient", "id": "bad id", "gender": "bad"})
+
+    outcome = operation_outcome(report)
+    id_issue = next(issue for issue in outcome["issue"] if issue["details"]["coding"][0]["code"] == "datatype.invalid")
+    terminology_issue = next(issue for issue in outcome["issue"] if issue["details"]["coding"][0]["code"] == "terminology.required")
+
+    assert id_issue["code"] == "invalid"
+    assert id_issue["expression"] == ["Patient.id"]
+    assert id_issue["location"] == ["/f:Patient/f:id"]
+    assert terminology_issue["code"] == "code-invalid"
+    profile_issue = next(issue for issue in outcome["issue"] if issue["details"]["coding"][0]["code"] == "profile.unknown")
+    assert profile_issue["code"] == "business-rule"
+    assert profile_issue["details"]["coding"][1] == {
+        "system": "https://pyfhircheck.local/profiles",
+        "code": "http://example.test/StructureDefinition/patient",
+        "display": "Validated profile",
+    }
 
 
 def test_drift_comparison_detects_new_errors() -> None:
@@ -233,7 +294,7 @@ def test_fhirpath_invariant_failure_from_profile(tmp_path: Path) -> None:
                 "snapshot": {
                     "element": [
                         {
-                            "path": "Patient.active",
+                            "path": "Patient",
                             "constraint": [{"key": "active-present", "severity": "error", "expression": "active.exists()"}],
                         }
                     ]
@@ -871,8 +932,10 @@ def test_configured_package_is_resolved_from_source_and_recorded(tmp_path: Path)
     )
     report = Validator(config).validate_resource({"resourceType": "Bar"})
     definition_source = report.to_dict()["definitionSource"]
+    summary = report.to_dict()["summary"]
     assert definition_source["packages"][0]["name"] == "example.bar"
     assert Path(definition_source["packages"][0]["path"]).exists()
+    assert summary["packageVersions"] == [{"name": "example.bar", "version": "1.0.0"}]
     assert any(issue.code == "cardinality.min" and issue.path == "Bar.status" for issue in report.issues)
 
 
@@ -955,3 +1018,614 @@ def test_profile_slicing_exists_discriminator(tmp_path: Path) -> None:
     patient["telecom"] = [{"system": "phone"}]
     report = Validator(config).validate_resource(patient)
     assert any(issue.code == "profile.slice.cardinality.min" for issue in report.issues)
+
+
+def test_malformed_package_resources_are_skipped_without_crashing(tmp_path: Path) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "not-json.json").write_text("{", encoding="utf-8")
+    (package_dir / "StructureDefinition-Malformed.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "kind": "resource",
+                "type": "Malformed",
+                "snapshot": {
+                    "element": [
+                        {"path": "Malformed"},
+                        {"path": "Malformed.status", "min": "not-an-int", "max": "bad", "type": [{"code": "code"}]},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    bad_archive = tmp_path / "bad.tgz"
+    bad_archive.write_bytes(b"not a gzip archive")
+
+    report = Validator(ValidatorConfig(local_package_paths=[str(package_dir), str(bad_archive)])).validate_resource(
+        {"resourceType": "Malformed", "status": "ok"}
+    )
+
+    assert report.resource_count == 1
+    assert not any(issue.code == "json.invalid" for issue in report.issues)
+
+
+def test_package_resource_definitions_load_on_first_use(tmp_path: Path) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "StructureDefinition-LazyType.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "kind": "resource",
+                "type": "LazyType",
+                "snapshot": {
+                    "element": [
+                        {"path": "LazyType"},
+                        {"path": "LazyType.status", "min": 1, "max": "1", "type": [{"code": "code"}]},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    validator = Validator(ValidatorConfig(local_package_paths=[str(package_dir)]))
+
+    assert "LazyType" not in validator.resource_definitions
+    report = validator.validate_resource({"resourceType": "LazyType", "status": "ok"})
+
+    assert report.status is Status.PASS
+    assert "LazyType" in validator.resource_definitions
+
+
+def test_package_value_sets_expand_lazily_and_cache(tmp_path: Path) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "CodeSystem-Test.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "CodeSystem",
+                "url": "http://example.test/CodeSystem/test",
+                "concept": [{"code": "a"}, {"code": "b"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "ValueSet-Test.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "ValueSet",
+                "url": "http://example.test/ValueSet/test",
+                "compose": {"include": [{"system": "http://example.test/CodeSystem/test"}]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    resolver = TerminologyResolver(ValidatorConfig().terminology, [str(package_dir)])
+
+    assert resolver.evidence()["loadedValueSets"] == 1
+    assert resolver.evidence()["expandedPackageValueSets"] == 0
+    assert resolver.contains("http://example.test/ValueSet/test", "a") is True
+    assert resolver.evidence()["expandedPackageValueSets"] == 2
+    assert resolver.contains("test", "missing") is False
+    assert resolver.evidence()["expandedPackageValueSets"] == 2
+
+
+def test_package_download_retries_transient_failures(tmp_path: Path, monkeypatch) -> None:
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self) -> bytes:
+            return b"package bytes"
+
+    calls = {"count": 0}
+
+    def flaky_urlopen(source: str, timeout: int):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise TimeoutError("temporary")
+        return Response()
+
+    monkeypatch.setattr("pyfhircheck.profiles.package.urlopen", flaky_urlopen)
+
+    resolved = PackageResolver(tmp_path).resolve(PackageConfig(name="example.retry", version="1.0.0"))
+
+    assert calls["count"] == 3
+    assert Path(resolved.path).read_bytes() == b"package bytes"
+
+
+def test_large_bundle_validation_smoke() -> None:
+    bundle = {
+        "resourceType": "Bundle",
+        "type": "collection",
+        "entry": [
+            {"resource": {"resourceType": "Patient", "id": f"p-{index}", "gender": "female"}}
+            for index in range(1000)
+        ],
+    }
+
+    report = Validator().validate_resource(bundle)
+
+    assert report.resource_count == 1001
+    assert report.to_dict()["summary"]["resourcesByType"] == {"Bundle": 1, "Patient": 1000}
+
+
+def test_backbone_element_recursive_validation(tmp_path: Path) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "StructureDefinition-WithBackbone.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "kind": "resource",
+                "type": "WithBackbone",
+                "snapshot": {
+                    "element": [
+                        {"path": "WithBackbone"},
+                        {"path": "WithBackbone.status", "min": 1, "max": "1", "type": [{"code": "code"}]},
+                        {"path": "WithBackbone.contact", "min": 0, "max": "*", "type": [{"code": "BackboneElement"}]},
+                        {"path": "WithBackbone.contact.name", "min": 1, "max": "1", "type": [{"code": "string"}]},
+                        {"path": "WithBackbone.contact.phone", "min": 0, "max": "1", "type": [{"code": "string"}]},
+                        {"path": "WithBackbone.contact.address", "min": 0, "max": "1", "type": [{"code": "BackboneElement"}]},
+                        {"path": "WithBackbone.contact.address.city", "min": 1, "max": "1", "type": [{"code": "string"}]},
+                        {"path": "WithBackbone.contact.address.zip", "min": 0, "max": "1", "type": [{"code": "string"}]},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = ValidatorConfig(local_package_paths=[str(package_dir)])
+    validator = Validator(config)
+
+    valid = {"resourceType": "WithBackbone", "status": "active", "contact": [{"name": "Alice", "address": {"city": "Berlin"}}]}
+    report = validator.validate_resource(valid)
+    assert report.status is Status.PASS
+
+    missing_required = {"resourceType": "WithBackbone", "status": "active", "contact": [{"phone": "123"}]}
+    report = validator.validate_resource(missing_required)
+    codes = {issue.code for issue in report.issues}
+    assert "cardinality.min" in codes
+
+    unknown_field = {"resourceType": "WithBackbone", "status": "active", "contact": [{"name": "Alice", "badField": "x"}]}
+    report = validator.validate_resource(unknown_field)
+    assert any(issue.code == "element.unknown" and "badField" in issue.path for issue in report.issues)
+
+    nested_missing = {"resourceType": "WithBackbone", "status": "active", "contact": [{"name": "Alice", "address": {"zip": "10115"}}]}
+    report = validator.validate_resource(nested_missing)
+    assert any(issue.code == "cardinality.min" and "city" in issue.path for issue in report.issues)
+
+
+def test_transitive_dependency_resolution(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    (base_dir / "StructureDefinition-Base.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "kind": "resource",
+                "type": "DepTest",
+                "url": "http://example.test/StructureDefinition/DepTest",
+                "snapshot": {
+                    "element": [
+                        {"path": "DepTest"},
+                        {"path": "DepTest.status", "min": 1, "max": "1", "type": [{"code": "code"}]},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (base_dir / "package.json").write_text(
+        json.dumps({"name": "example.base", "version": "1.0.0", "dependencies": {}}),
+        encoding="utf-8",
+    )
+    base_tgz = tmp_path / "example.base-1.0.0.tgz"
+    with tarfile.open(base_tgz, "w:gz") as archive:
+        for f in base_dir.iterdir():
+            archive.add(f, arcname=f"package/{f.name}")
+
+    ig_dir = tmp_path / "ig"
+    ig_dir.mkdir()
+    (ig_dir / "StructureDefinition-IGProfile.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "url": "http://example.test/StructureDefinition/ig-profile",
+                "type": "DepTest",
+                "baseDefinition": "http://example.test/StructureDefinition/DepTest",
+                "differential": {
+                    "element": [{"path": "DepTest.status", "fixedCode": "active"}]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ig_dir / "package.json").write_text(
+        json.dumps({"name": "example.ig", "version": "2.0.0", "dependencies": {"example.base": "1.0.0"}}),
+        encoding="utf-8",
+    )
+    ig_tgz = tmp_path / "example.ig-2.0.0.tgz"
+    with tarfile.open(ig_tgz, "w:gz") as archive:
+        for f in ig_dir.iterdir():
+            archive.add(f, arcname=f"package/{f.name}")
+
+    config = ValidatorConfig(
+        packages=[
+            PackageConfig(name="example.ig", version="2.0.0", source=str(ig_tgz)),
+            PackageConfig(name="example.base", version="1.0.0", source=str(base_tgz)),
+        ],
+        package_cache_dir=str(cache_dir),
+        profiles={"DepTest": ["http://example.test/StructureDefinition/ig-profile"]},
+    )
+    validator = Validator(config)
+    report = validator.validate_resource(
+        {
+            "resourceType": "DepTest",
+            "status": "inactive",
+            "meta": {"profile": ["http://example.test/StructureDefinition/ig-profile"]},
+        }
+    )
+    assert report.to_dict()["definitionSource"]["packages"][0]["name"] == "example.base"
+    assert report.to_dict()["definitionSource"]["packages"][1]["name"] == "example.ig"
+    assert any(issue.code == "profile.fixed" or issue.code == "profile.element.fixed" for issue in report.issues)
+
+
+def test_three_level_snapshot_resolution(tmp_path: Path) -> None:
+    package_dir = tmp_path / "ig"
+    package_dir.mkdir()
+    (package_dir / "StructureDefinition-base-animal.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "url": "http://example.test/StructureDefinition/Animal",
+                "kind": "resource",
+                "type": "Animal",
+                "snapshot": {
+                    "element": [
+                        {"path": "Animal"},
+                        {"path": "Animal.species", "min": 1, "max": "1", "type": [{"code": "string"}]},
+                        {"path": "Animal.name", "min": 0, "max": "1", "type": [{"code": "string"}]},
+                        {"path": "Animal.weight", "min": 0, "max": "1", "type": [{"code": "decimal"}]},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "StructureDefinition-pet.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "url": "http://example.test/StructureDefinition/Pet",
+                "type": "Animal",
+                "baseDefinition": "http://example.test/StructureDefinition/Animal",
+                "differential": {
+                    "element": [
+                        {"path": "Animal.name", "min": 1, "max": "1"},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "StructureDefinition-dog.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "url": "http://example.test/StructureDefinition/Dog",
+                "type": "Animal",
+                "baseDefinition": "http://example.test/StructureDefinition/Pet",
+                "differential": {
+                    "element": [
+                        {"path": "Animal.species", "fixedString": "dog"},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = ValidatorConfig(
+        local_package_paths=[str(package_dir)],
+        profiles={"Animal": ["http://example.test/StructureDefinition/Dog"]},
+    )
+    animal = {
+        "resourceType": "Animal",
+        "species": "cat",
+        "meta": {"profile": ["http://example.test/StructureDefinition/Dog"]},
+    }
+    report = Validator(config).validate_resource(animal)
+    codes = {issue.code for issue in report.issues}
+    assert "profile.element.fixed" in codes or "profile.fixed" in codes
+    assert any(
+        (issue.code == "profile.cardinality.min" or issue.code == "profile.element.cardinality.min")
+        and "name" in (issue.path or "")
+        for issue in report.issues
+    )
+    assert report.to_dict()["definitionSource"]["mergedSnapshots"] >= 2
+
+
+def test_binding_tightening_in_snapshot_merge(tmp_path: Path) -> None:
+    package_dir = tmp_path / "ig"
+    package_dir.mkdir()
+    (package_dir / "StructureDefinition-base-obs.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "url": "http://example.test/StructureDefinition/BaseObs",
+                "kind": "resource",
+                "type": "Obs",
+                "snapshot": {
+                    "element": [
+                        {"path": "Obs"},
+                        {
+                            "path": "Obs.status",
+                            "min": 1,
+                            "max": "1",
+                            "type": [{"code": "code"}],
+                            "binding": {"strength": "extensible", "valueSet": "http://example.test/ValueSet/obs-status"},
+                        },
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "StructureDefinition-strict-obs.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "url": "http://example.test/StructureDefinition/StrictObs",
+                "type": "Obs",
+                "baseDefinition": "http://example.test/StructureDefinition/BaseObs",
+                "differential": {
+                    "element": [
+                        {
+                            "path": "Obs.status",
+                            "binding": {"strength": "required", "valueSet": "http://example.test/ValueSet/obs-status"},
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (package_dir / "ValueSet-obs-status.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "ValueSet",
+                "url": "http://example.test/ValueSet/obs-status",
+                "compose": {"include": [{"system": "http://example.test/cs", "concept": [{"code": "final"}, {"code": "amended"}]}]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = ValidatorConfig(
+        local_package_paths=[str(package_dir)],
+        profiles={"Obs": ["http://example.test/StructureDefinition/StrictObs"]},
+    )
+    report = Validator(config).validate_resource(
+        {"resourceType": "Obs", "status": "invalid-code", "meta": {"profile": ["http://example.test/StructureDefinition/StrictObs"]}}
+    )
+    assert any(
+        "required" in issue.code and "binding" in issue.code
+        for issue in report.issues
+    )
+
+
+def test_type_discriminator_matches_by_element_type(tmp_path: Path) -> None:
+    profile = tmp_path / "obs-sliced-value.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "url": "http://example.test/StructureDefinition/obs-sliced-value",
+                "type": "Observation",
+                "differential": {
+                    "element": [
+                        {
+                            "path": "Observation.value[x]",
+                            "slicing": {
+                                "discriminator": [{"type": "type", "path": "$this"}],
+                                "rules": "open",
+                            },
+                        },
+                        {
+                            "path": "Observation.value[x]",
+                            "sliceName": "valueQuantity",
+                            "min": 1,
+                            "max": "1",
+                            "type": [{"code": "Quantity"}],
+                        },
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = ValidatorConfig(
+        local_package_paths=[str(profile)],
+        profiles={"Observation": ["http://example.test/StructureDefinition/obs-sliced-value"]},
+    )
+    obs_with_quantity = {
+        "resourceType": "Observation",
+        "id": "o1",
+        "status": "final",
+        "code": {"text": "test"},
+        "valueQuantity": {"value": 42, "unit": "mg"},
+        "meta": {"profile": ["http://example.test/StructureDefinition/obs-sliced-value"]},
+    }
+    report = Validator(config).validate_resource(obs_with_quantity)
+    slice_issues = [i for i in report.issues if "slice" in i.code]
+    assert not any(i.code == "profile.slice.cardinality.min" for i in slice_issues)
+
+    obs_with_string = {
+        "resourceType": "Observation",
+        "id": "o2",
+        "status": "final",
+        "code": {"text": "test"},
+        "valueString": "no match",
+        "meta": {"profile": ["http://example.test/StructureDefinition/obs-sliced-value"]},
+    }
+    report = Validator(config).validate_resource(obs_with_string)
+    assert any(i.code == "profile.slice.cardinality.min" for i in report.issues)
+
+
+def test_nested_pattern_discriminator_deep_path(tmp_path: Path) -> None:
+    profile = tmp_path / "patient-identifier-typed.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "url": "http://example.test/StructureDefinition/patient-identifier-typed",
+                "type": "Patient",
+                "differential": {
+                    "element": [
+                        {
+                            "path": "Patient.identifier",
+                            "slicing": {
+                                "discriminator": [{"type": "value", "path": "type.coding.system"}],
+                                "rules": "open",
+                            },
+                        },
+                        {"path": "Patient.identifier", "sliceName": "kvnr", "min": 1, "max": "1"},
+                        {
+                            "path": "Patient.identifier.type.coding.system",
+                            "sliceName": "kvnr",
+                            "fixedUri": "http://fhir.de/CodeSystem/identifier-type-de-basis",
+                        },
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = ValidatorConfig(
+        local_package_paths=[str(profile)],
+        profiles={"Patient": ["http://example.test/StructureDefinition/patient-identifier-typed"]},
+    )
+    patient_valid = valid_patient()
+    patient_valid["meta"] = {"profile": ["http://example.test/StructureDefinition/patient-identifier-typed"]}
+    patient_valid["identifier"] = [
+        {
+            "type": {"coding": [{"system": "http://fhir.de/CodeSystem/identifier-type-de-basis", "code": "GKV"}]},
+            "system": "http://fhir.de/sid/gkv/kvid-10",
+            "value": "A123456789",
+        }
+    ]
+    report = Validator(config).validate_resource(patient_valid)
+    assert not any(i.code == "profile.slice.cardinality.min" for i in report.issues)
+
+    patient_wrong = valid_patient()
+    patient_wrong["meta"] = {"profile": ["http://example.test/StructureDefinition/patient-identifier-typed"]}
+    patient_wrong["identifier"] = [
+        {"system": "http://other.example/id", "value": "X99"}
+    ]
+    report = Validator(config).validate_resource(patient_wrong)
+    assert any(i.code == "profile.slice.cardinality.min" for i in report.issues)
+
+
+def test_closed_slicing_rejects_unmatched_elements(tmp_path: Path) -> None:
+    profile = tmp_path / "patient-closed-telecom.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "url": "http://example.test/StructureDefinition/patient-closed-telecom",
+                "type": "Patient",
+                "differential": {
+                    "element": [
+                        {
+                            "path": "Patient.telecom",
+                            "slicing": {
+                                "discriminator": [{"type": "value", "path": "system"}],
+                                "rules": "closed",
+                            },
+                        },
+                        {"path": "Patient.telecom", "sliceName": "phone", "min": 0, "max": "*"},
+                        {"path": "Patient.telecom.system", "sliceName": "phone", "fixedCode": "phone"},
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = ValidatorConfig(
+        local_package_paths=[str(profile)],
+        profiles={"Patient": ["http://example.test/StructureDefinition/patient-closed-telecom"]},
+    )
+    patient_ok = valid_patient()
+    patient_ok["meta"] = {"profile": ["http://example.test/StructureDefinition/patient-closed-telecom"]}
+    patient_ok["telecom"] = [{"system": "phone", "value": "555-1234"}]
+    report = Validator(config).validate_resource(patient_ok)
+    assert not any(i.code == "profile.slice.closed" for i in report.issues)
+
+    patient_bad = valid_patient()
+    patient_bad["meta"] = {"profile": ["http://example.test/StructureDefinition/patient-closed-telecom"]}
+    patient_bad["telecom"] = [
+        {"system": "phone", "value": "555-1234"},
+        {"system": "email", "value": "foo@bar.com"},
+    ]
+    report = Validator(config).validate_resource(patient_bad)
+    assert any(i.code == "profile.slice.closed" for i in report.issues)
+
+
+def test_slice_element_binding_enforcement(tmp_path: Path) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "ValueSet-system-vs.json").write_text(
+        json.dumps(
+            {
+                "resourceType": "ValueSet",
+                "url": "http://example.test/ValueSet/telecom-system",
+                "compose": {"include": [{"system": "http://hl7.org/fhir/contact-point-system", "concept": [{"code": "phone"}, {"code": "fax"}]}]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    profile = package_dir / "StructureDefinition-bound-telecom.json"
+    profile.write_text(
+        json.dumps(
+            {
+                "resourceType": "StructureDefinition",
+                "url": "http://example.test/StructureDefinition/bound-telecom",
+                "type": "Patient",
+                "differential": {
+                    "element": [
+                        {
+                            "path": "Patient.telecom",
+                            "slicing": {
+                                "discriminator": [{"type": "exists", "path": "value"}],
+                                "rules": "open",
+                            },
+                        },
+                        {"path": "Patient.telecom", "sliceName": "main", "min": 1, "max": "1"},
+                        {"path": "Patient.telecom.value", "sliceName": "main", "min": 1, "max": "1"},
+                        {
+                            "path": "Patient.telecom.system",
+                            "sliceName": "main",
+                            "min": 1,
+                            "max": "1",
+                            "binding": {"strength": "required", "valueSet": "http://example.test/ValueSet/telecom-system"},
+                        },
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = ValidatorConfig(
+        local_package_paths=[str(package_dir)],
+        profiles={"Patient": ["http://example.test/StructureDefinition/bound-telecom"]},
+    )
+    patient = valid_patient()
+    patient["meta"] = {"profile": ["http://example.test/StructureDefinition/bound-telecom"]}
+    patient["telecom"] = [{"system": "email", "value": "foo@bar.com"}]
+    report = Validator(config).validate_resource(patient)
+    assert any("binding" in i.code and "required" in i.code for i in report.issues)

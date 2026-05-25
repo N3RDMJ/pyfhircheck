@@ -1,0 +1,6 @@
+{
+  "description": "ISiK Basismodul fixture ISiKVersicherungsverhaeltnisGesetzlich/valid/Coverage-CoverageGesetzlich.json",
+  "expectedStatus": "PASS",
+  "fixturePath": "../../../../fixtures/isik3-basismodul/ISiKVersicherungsverhaeltnisGesetzlich/valid/Coverage-CoverageGesetzlich.json",
+  "source": "gematik/app-referencevalidator-plugins valmodule-isik3-basismodul/src/main/resources/plugin/test-files/ISiK-Basismodul"
+}

@@ -1,0 +1,6 @@
+{
+  "description": "ISiK Basismodul fixture SnomedTests/valid/SCTDiagnose-test.json",
+  "expectedStatus": "PASS",
+  "fixturePath": "../../../../fixtures/isik3-basismodul/SnomedTests/valid/SCTDiagnose-test.json",
+  "source": "gematik/app-referencevalidator-plugins valmodule-isik3-basismodul/src/main/resources/plugin/test-files/ISiK-Basismodul"
+}

@@ -20,7 +20,8 @@ class TerminologyResolver:
     def __init__(self, config: TerminologyConfig, package_paths: list[str] | None = None, remote_sources: list[str] | None = None):
         self.config = config
         self.package_code_systems: dict[str, dict[str, Concept]] = {}
-        self.package_value_sets: dict[str, set[str]] = {}
+        self.package_value_set_definitions: dict[str, dict[str, Any]] = {}
+        self._value_set_cache: dict[str, set[str]] = {}
         self.loaded_code_systems = 0
         self.loaded_value_sets = 0
         self._load_packages(package_paths or [], remote_sources or [])
@@ -28,13 +29,17 @@ class TerminologyResolver:
     def contains(self, value_set: str, code: str) -> bool | None:
         if self.config.mode == "off":
             return None
+        if value_set in self.config.ignored_value_sets or value_set.rsplit("/", 1)[-1] in self.config.ignored_value_sets:
+            return None
+        if value_set in self.config.ignored_code_systems or value_set.rsplit("/", 1)[-1] in self.config.ignored_code_systems:
+            return None
         configured = self.config.code_systems.get(value_set)
         allowed = (
             set(configured)
             if configured is not None
             else VALUE_SETS.get(value_set)
-            or self.package_value_sets.get(value_set)
-            or self.package_value_sets.get(value_set.rsplit("/", 1)[-1])
+            or self._expanded_value_set(value_set)
+            or self._expanded_value_set(value_set.rsplit("/", 1)[-1])
             or set(self.package_code_systems.get(value_set, {}))
             or set(self.package_code_systems.get(value_set.rsplit("/", 1)[-1], {}))
         )
@@ -47,11 +52,11 @@ class TerminologyResolver:
             **self.config.to_dict(),
             "loadedCodeSystems": self.loaded_code_systems,
             "loadedValueSets": self.loaded_value_sets,
-            "expandedPackageValueSets": len(self.package_value_sets),
+            "expandedPackageValueSets": len(self._value_set_cache),
         }
 
     def _load_packages(self, paths: list[str], remote_sources: list[str]) -> None:
-        for resource in iter_package_resources(paths, remote_sources):
+        for resource in iter_package_resources(paths, remote_sources, {"CodeSystem", "ValueSet"}):
             resource_type = resource.get("resourceType")
             if resource_type == "CodeSystem":
                 self._load_code_system(resource)
@@ -65,6 +70,16 @@ class TerminologyResolver:
         self.loaded_code_systems += 1
 
     def _load_value_set(self, resource: dict) -> None:
+        for key in _resource_keys(resource):
+            self.package_value_set_definitions[key] = resource
+        self.loaded_value_sets += 1
+
+    def _expanded_value_set(self, key: str) -> set[str] | None:
+        if key in self._value_set_cache:
+            return self._value_set_cache[key]
+        resource = self.package_value_set_definitions.get(key)
+        if resource is None:
+            return None
         codes: set[str] = set()
         compose = resource.get("compose", {})
         if isinstance(compose, dict):
@@ -76,9 +91,9 @@ class TerminologyResolver:
         if isinstance(expansion, dict):
             for contains in expansion.get("contains", []):
                 codes.update(_expansion_codes(contains))
-        for key in _resource_keys(resource):
-            self.package_value_sets[key] = codes
-        self.loaded_value_sets += 1
+        for resource_key in _resource_keys(resource):
+            self._value_set_cache[resource_key] = codes
+        return codes
 
     def _codes_for_include(self, include: Any) -> set[str]:
         if not isinstance(include, dict):

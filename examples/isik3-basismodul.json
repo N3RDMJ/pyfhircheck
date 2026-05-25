@@ -1,0 +1,67 @@
+{
+  "fhirVersion": "4.0.1",
+  "enabledIGs": [
+    "de.gematik.isik-basismodul"
+  ],
+  "packages": [
+    {
+      "name": "de.gematik.isik-basismodul",
+      "version": "3.1.1"
+    }
+  ],
+  "packageCacheDir": ".pyfhircheck/packages",
+  "terminology": {
+    "mode": "local",
+    "ignoredCodeSystems": [
+      "http://snomed.info/sct",
+      "http://fhir.de/CodeSystem/bfarm/icd-10-gm",
+      "http://fhir.de/CodeSystem/bfarm/atc",
+      "http://fhir.de/CodeSystem/bfarm/ops",
+      "http://loinc.org"
+    ],
+    "ignoredValueSets": []
+  },
+  "profiles": {
+    "Account": [
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKAbrechnungsfall"
+    ],
+    "Bundle": [
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKBerichtBundle"
+    ],
+    "CodeSystem": [
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKCodeSystem"
+    ],
+    "Composition": [
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKBerichtSubSysteme"
+    ],
+    "Condition": [
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKDiagnose"
+    ],
+    "Coverage": [
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKVersicherungsverhaeltnisGesetzlich",
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKVersicherungsverhaeltnisSelbstzahler"
+    ],
+    "Encounter": [
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKKontaktGesundheitseinrichtung"
+    ],
+    "Patient": [
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKPatient"
+    ],
+    "Practitioner": [
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKPersonImGesundheitsberuf"
+    ],
+    "Procedure": [
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKProzedur"
+    ],
+    "RelatedPerson": [
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKAngehoeriger"
+    ],
+    "ValueSet": [
+      "https://gematik.de/fhir/isik/v3/Basismodul/StructureDefinition/ISiKValueSet"
+    ]
+  },
+  "errorOnUnknownProfile": false,
+  "allowUnknownExtensions": true,
+  "ciFailureThreshold": "error",
+  "evidenceOutputDir": "evidence/isik3-basismodul"
+}

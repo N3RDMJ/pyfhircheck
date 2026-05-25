@@ -1,0 +1,6 @@
+{
+  "description": "ISiK Basismodul fixture ISiKAbrechnungsfall/valid/Account-AbrechnungsfallAmbulant.json",
+  "expectedStatus": "PASS",
+  "fixturePath": "../../../../fixtures/isik3-basismodul/ISiKAbrechnungsfall/valid/Account-AbrechnungsfallAmbulant.json",
+  "source": "gematik/app-referencevalidator-plugins valmodule-isik3-basismodul/src/main/resources/plugin/test-files/ISiK-Basismodul"
+}

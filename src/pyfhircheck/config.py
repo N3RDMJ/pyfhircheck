@@ -104,6 +104,10 @@ class ValidatorConfig:
     server_validation_targets: list[str] = field(default_factory=list)
 
     @classmethod
+    def load_dict(cls, data: dict[str, Any]) -> "ValidatorConfig":
+        return cls._from_data(data)
+
+    @classmethod
     def load(cls, path: str | Path | None) -> "ValidatorConfig":
         if path is None:
             return cls()
@@ -122,6 +126,10 @@ class ValidatorConfig:
             ) from exc
         if not isinstance(data, dict):
             raise ConfigError(f"Config file {config_path} must contain a JSON object")
+        return cls._from_data(data)
+
+    @classmethod
+    def _from_data(cls, data: dict[str, Any]) -> "ValidatorConfig":
         terminology_raw = data.get("terminology", {})
         terminology = terminology_raw if isinstance(terminology_raw, dict) else {}
         return cls(

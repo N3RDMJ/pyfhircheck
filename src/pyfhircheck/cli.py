@@ -13,6 +13,7 @@ from pyfhircheck.evidence.drift import compare_reports
 from pyfhircheck.evidence.store import EvidenceStore
 from pyfhircheck.exceptions import PyFhircheckError
 from pyfhircheck.models import Status, ValidationReport
+from pyfhircheck.observability import bind_context, configure_logging, get_logger, log_operation, set_correlation_id
 from pyfhircheck.profiles.package import PackageResolver
 from pyfhircheck.reporting.output import agent_report, ci_summary, console_summary, json_report, operation_outcome
 from pyfhircheck.rules.catalog import explain_rule, rule_catalog
@@ -21,9 +22,13 @@ from pyfhircheck.rules.catalog import explain_rule, rule_catalog
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    configure_logging(level=getattr(args, "log_level", None), force=getattr(args, "log_level", None) is not None)
+    logger = get_logger("cli")
     if args.command is None:
         parser.print_help()
         return 2
+    set_correlation_id()
+    bind_context(command=args.command)
     try:
         if args.command == "compare":
             return _compare(args)
@@ -54,7 +59,8 @@ def main(argv: list[str] | None = None) -> int:
                 for error in config_errors:
                     print(error)
                 return 2
-            resolved = PackageResolver(config.package_cache_dir).resolve_all(config.packages)
+            with log_operation("package_fetch", package_count=len(config.packages)):
+                resolved = PackageResolver(config.package_cache_dir).resolve_all(config.packages)
             print(json.dumps([package.to_dict() for package in resolved], indent=2, sort_keys=True))
             return 0
         if args.command == "conformance":
@@ -66,18 +72,33 @@ def main(argv: list[str] | None = None) -> int:
                 print(error)
             return 2
         validator = Validator(config)
-        if args.command in {"file", "bundle", "folder"}:
-            path = Path(args.path)
-            changed_files = _changed_files(path, args.changed_from) if args.changed_from else None
-            if changed_files is not None:
-                report = validator.validate_files(changed_files, f"{path} changed since {args.changed_from}", reference_file_paths=iter_json_files(path))
+        with log_operation("validate", command=args.command):
+            if args.command in {"file", "bundle", "folder"}:
+                path = Path(args.path)
+                bind_context(input_source=str(path))
+                changed_files = _changed_files(path, args.changed_from) if args.changed_from else None
+                if changed_files is not None:
+                    report = validator.validate_files(changed_files, f"{path} changed since {args.changed_from}", reference_file_paths=iter_json_files(path))
+                else:
+                    report = validator.validate_path(path)
+            elif args.command == "server":
+                bind_context(input_source=args.url)
+                report = validator.validate_server(args.url)
             else:
-                report = validator.validate_path(path)
-        elif args.command == "server":
-            report = validator.validate_server(args.url)
-        else:
-            parser.print_help()
-            return 2
+                parser.print_help()
+                return 2
+        bind_context(run_id=report.run_id)
+        logger.info(
+            "validation finished",
+            extra={
+                "run_id": report.run_id,
+                "status": report.status.value,
+                "resource_count": report.resource_count,
+                "error_count": len(report.errors),
+                "warning_count": len(report.warnings),
+                "evidence_dir": config.evidence_output_dir,
+            },
+        )
         report.replay["validatorCommand"] = _replay_command(args)
         evidence_path = EvidenceStore(config.evidence_output_dir).write(report, argv=_replay_command(args))
         _write_requested_outputs(args, report)
@@ -89,9 +110,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Evidence: {evidence_path}")
         return _exit_for(report, config)
     except PyFhircheckError as exc:
+        logger.error(
+            "validator command failed",
+            extra={"error_type": type(exc).__name__, "error_message": str(exc)},
+        )
         print(f"Validator error: {exc}")
         return 2
     except Exception as exc:  # noqa: BLE001 - CLI maps unexpected runtime errors to exit code 2.
+        logger.exception(
+            "unexpected validator failure",
+            extra={"error_type": type(exc).__name__, "error_message": str(exc)},
+        )
         print(f"Validator error: {exc}")
         return 2
 
@@ -130,6 +159,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _common(cmd: argparse.ArgumentParser) -> None:
     cmd.add_argument("-c", "--config")
+    cmd.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], help="structured log level (default: WARNING or PYFHIRCHECK_LOG_LEVEL)")
     cmd.add_argument("--json-output")
     cmd.add_argument("--operation-outcome-output")
     cmd.add_argument("--ci-summary-output")

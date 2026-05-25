@@ -13,6 +13,7 @@ from pyfhircheck.core.definitions import R4_RESOURCES, ElementDef, r4_all_resour
 from pyfhircheck.core.fhirpath import backend_name, evaluate
 from pyfhircheck.core.util import DATE_RE, DATETIME_RE, FHIR_REF_RE, ID_RE, INSTANT_RE, file_sha256, iter_json_files, load_json_file, resource_key, stable_hash, values_at_path
 from pyfhircheck.models import ResourceValidationSummary, Severity, Status, ValidationIssue, ValidationReport
+from pyfhircheck.observability import get_logger
 from pyfhircheck.profiles.loader import ProfileRegistry
 from pyfhircheck.profiles.package import PackageResolver
 from pyfhircheck.profiles.specification import PRIMITIVE_TYPES, SpecificationDefinitions, merged_complex_types
@@ -101,6 +102,8 @@ _CHOICE_SUFFIX_TO_FHIR_TYPE: dict[str, str] = {
 
 _SKIP_INVARIANTS = {"ext-1", "ele-1", "dom-6", "con-1", "bdl-5", "vsd-6"}
 
+logger = get_logger("engine")
+
 
 def _codeable_concept_codes(value: Any) -> list[str]:
     if not isinstance(value, dict):
@@ -139,6 +142,16 @@ class Validator:
         self.merged_snapshots = specification.merged_snapshots + self.profile_registry.merged_snapshots
         self.terminology = TerminologyResolver(self.config.terminology, all_local_package_paths, self.config.remote_package_sources)
         self.custom_rules = CustomRuleRunner(self.config.custom_rules)
+        logger.info(
+            "validator initialized",
+            extra={
+                "package_count": len(self.resolved_packages),
+                "structure_definitions": self.loaded_structure_definitions,
+                "merged_snapshots": self.merged_snapshots,
+                "resource_definitions": len(self.resource_definitions),
+                "fhirpath_backend": backend_name(),
+            },
+        )
 
     def validate_path(self, path: Path, input_source: str | None = None) -> ValidationReport:
         return self.validate_files(iter_json_files(path), input_source or str(path))
@@ -989,7 +1002,7 @@ class Validator:
             "fhirPathBackend": backend_name(),
             "packages": [package.to_dict() for package in self.resolved_packages],
         }
-        return ValidationReport(
+        report = ValidationReport(
             run_id=str(uuid4()),
             timestamp=datetime.now(timezone.utc).isoformat(),
             validator_version=__version__,
@@ -1012,6 +1025,19 @@ class Validator:
             resources=self._resource_summaries(resources, issues),
             status=status,
         )
+        logger.debug(
+            "validation report built",
+            extra={
+                "run_id": report.run_id,
+                "input_source": input_source,
+                "resource_count": report.resource_count,
+                "issue_count": len(issues),
+                "error_count": len(report.errors),
+                "warning_count": len(report.warnings),
+                "status": status.value,
+            },
+        )
+        return report
 
     def _resource_summaries(self, resources: list[dict[str, Any]], issues: list[ValidationIssue]) -> list[ResourceValidationSummary]:
         return [

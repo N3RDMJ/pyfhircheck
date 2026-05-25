@@ -14,6 +14,9 @@ from urllib.request import urlopen
 
 from pyfhircheck.config import PackageConfig
 from pyfhircheck.exceptions import PackageError
+from pyfhircheck.observability import get_logger
+
+logger = get_logger("package")
 
 
 @dataclass(frozen=True)
@@ -223,6 +226,16 @@ def _read_url(source: str, timeout: int, attempts: int = 3) -> bytes | None:
         except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
             last_error = exc
             if attempt < attempts - 1:
+                logger.warning(
+                    "package download retry",
+                    extra={
+                        "source": source,
+                        "attempt": attempt + 1,
+                        "max_attempts": attempts,
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
                 time.sleep(0.2 * (attempt + 1))
     if last_error is not None:
         return None
